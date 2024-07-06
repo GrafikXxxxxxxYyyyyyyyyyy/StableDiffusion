@@ -134,7 +134,7 @@ class StableDiffusionUnifiedPipeline():
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_images_per_prompt: Optional[int] = 1,
-        num_inference_steps: int = 50,
+        num_inference_steps: int = 30,
         denoising_end: Optional[float] = None,
         guidance_scale: float = 5.0,
         latents: Optional[torch.FloatTensor] = None,

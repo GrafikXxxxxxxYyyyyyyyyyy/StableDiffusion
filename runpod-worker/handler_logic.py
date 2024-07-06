@@ -53,12 +53,8 @@ def save_and_upload_images(images, job_id):
 
 class Handler():
     def __init__(self, device="cuda"): 
-        self.inference_step = 0
-        self.train_step = 0
-        self.constructor_step = 0
         self.device = device
         self.last_id = '0'
-
         self.model: SDModelWrapper = None
 
 
@@ -70,7 +66,7 @@ class Handler():
         self.model = model
         self.last_id = job_id
 
-        # 1. Устанавливает режим работы
+        # 1. Устанавливает режим работы (по-умолчанию inference)
         mode = "inference"
         if "mode" in list(job_input.keys()):
             mode = job_input.pop('mode')
@@ -96,36 +92,8 @@ class Handler():
                 
             response = self.inference_mode(request)
             response["seed"] = request["seed"]
-
-        elif mode == "inference_wandb":
-            if "prompt" not in list(job_input.keys()):
-                raise ValueError(f"Request must contain 'prompt' field working in '{mode}' mode!")
-            
-            request = {**job_input, **request}
-            if "seed" not in request:
-                request["seed"] = np.random.randint(0, 1000000000)
-                
-            response = self.inference_wandb_mode(model, request)
-        
-        elif mode == "constructor":
-            variables = {}
-            if "variable" not in list(job_input.keys()):
-                raise ValueError(f"Request must contain 'variable' field working in '{mode}' mode!")
-            variables = job_input.pop('variable')
-            
-            if "prompt" not in list(job_input.keys()):
-                raise ValueError(f"Request must contain 'prompt' field working in '{mode}' mode!")
-            
-            request = {**job_input, **request}
-            if "seed" not in request:
-                request["seed"] = np.random.randint(0, 1000000000)
-            
-            response = self.constructor_mode(model, request, variables)
-
         elif mode == "train":
-            # TODO: Create serverless train pipeline
             pass
-
         else:
             raise ValueError(f"Unknown mode '{mode}")
         
@@ -133,13 +101,16 @@ class Handler():
 
 
     def maybe_reload_model(self, model_config):
-        ckpt_type = None
-        ckpt_name = None
-        if "type" in list(model_config.keys()):
-            ckpt_type = model_config.pop('type')
-        if "name" in list(model_config.keys()):
-            ckpt_name = model_config.pop('name')
-        self.model.reload(model_name=ckpt_name, model_type=ckpt_type)
+        if "ckpt_path" in list(model_config.keys()):
+            self.model.reload(ckpt_path=model_config["ckpt_path"])            
+        else:
+            ckpt_type = None
+            ckpt_name = None
+            if "type" in list(model_config.keys()):
+                ckpt_type = model_config.pop('type')
+            if "name" in list(model_config.keys()):
+                ckpt_name = model_config.pop('name')
+            self.model.reload(model_name=ckpt_name, model_type=ckpt_type)
         
         loras = {}
         if "loras" in list(model_config.keys()):
@@ -173,6 +144,11 @@ class Handler():
         # Init inference pipeline
         pipeline = StableDiffusionUnifiedPipeline(do_cfg=True, device=self.device)
 
+        # Обработка изображений если те присутствуют в конфиге
+        if "image" in list(inference_config.keys()):
+            # inference_config["image"] = 
+            pass
+
         images = pipeline(self.model, **inference_config)
         if isinstance(images, torch.Tensor):
             images = convert_pt_to_numpy(images)
@@ -192,161 +168,3 @@ class Handler():
 
         return response
     
-    
-    def inference_wandb_mode(self, inference_config) -> dict:
-        """
-        inference_config example:
-        {
-            prompt: Union[str, List[str]],
-            prompt_2: Optional[Union[str, List[str]]] = None,
-            negative_prompt: Optional[Union[str, List[str]]] = None,
-            negative_prompt_2: Optional[Union[str, List[str]]] = None,
-            height: Optional[int] = None,
-            width: Optional[int] = None,
-            num_inference_steps: Optional[int] = 30,
-            guidance_scale: Optional[float] = 6,
-            num_images_per_prompt: Optional[int] = 1,
-            denoising_end: Optional[float] = None,
-            cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-            clip_skip: Optional[int] = None,
-            seed: Optional[int] = None,
-        }
-        """
-        # Init inference pipeline
-        pipeline = StableDiffusionUnifiedPipeline(do_cfg=True, device=self.device)
-
-        # Inference
-        # TODO: Написать логику работы с refiner
-        images = pipeline(self.model, **inference_config)
-        images = convert_pt_to_numpy(images)
-        
-        # Log results with W&B
-        with wandb.init(project="AvaGen_endpoint", name=f'infrence_run_{self.inference_step}') as run:
-            # Берём из модели название планировщика шума
-            inference_config['scheduler_name'] = self.model.scheduler_name
-            self._log_inference(images, inference_config)
-            self.inference_step += 1
-            run_url = run.get_url()
-        wandb.finish()
-
-        image_urls = save_and_upload_images(images, self.last_id)
-        response = {
-            "wandb_url": run_url,
-            "images": image_urls,
-        }
-
-        return response
-
-
-    def constructor_mode(self, constructor_config, variables) -> dict:
-        pipeline = StableDiffusionUnifiedPipeline(do_cfg=True, device=self.device)
-
-        if "schedulers" not in variables:
-            variables["schedulers"] = ["DPM++ 2M SDE Karras"]
-        if "lora_scales" not in variables:
-            variables["lora_scales"] = [0.7]
-        if "num_inference_steps" not in variables:
-            variables["num_inference_steps"] = [30]
-        if "guidance_scale" not in variables:
-            variables["guidance_scale"] = [7]
-
-        lora_name = list(self.last_adapters)[0]
-
-        with wandb.init(project="AvaGen_endpoint", name=f'constructor_run_{self.constructor_step}') as run:
-            self.constructor_step += 1
-            run_url = run.get_url()
-
-            for scheduler_name in variables["schedulers"]:
-                self.model.set_scheduler(scheduler_name)
-
-                for lora_scale in variables["lora_scales"]:
-                    self.model.set_adapters(lora_name, lora_scale)
-
-                    keys = ["Num steps"]
-                    keys.extend([f"CFG scale: {val}" for val in variables["guidance_scale"]])
-                    steps_guidance = wandb.Table(keys)
-                    for steps in variables["num_inference_steps"]:
-                        batch_images = []
-                        for guidance_scale in variables["guidance_scale"]:
-                            images = pipeline(
-                                self.model, 
-                                num_inference_steps=steps,
-                                guidance_scale=guidance_scale,
-                                **constructor_config
-                            )
-                            images = convert_pt_to_numpy(images)
-                            batch_images.append([wandb.Image(img) for img in images])
-                        
-                        steps_guidance.add_data(steps, *batch_images)
-
-                    wandb.log({f"Scheduler: '{scheduler_name}' / LoRA scale: '{float(lora_scale)}'": steps_guidance})
-        wandb.finish()
-
-        # Create responce
-        response = {
-            "wandb_url": run_url
-        }
-        
-        return response
-
-    
-    def _log_inference(self, images, config):
-        log_info = wandb.Table([
-            "Prompt", "Negative prompt", "Prompt 2", "Negative prompt 2", "Scheduler", "Steps", "Guidance scale", "Clip_skip", "Seed"
-        ])
-
-        num_images_per_prompt = 1
-        if 'num_images_per_prompt' in config:
-            num_images_per_prompt = config['num_images_per_prompt']
-
-        prompts = config['prompt']
-        if isinstance(config['prompt'], str):
-            prompts = [config['prompt']]
-
-        negative_prompts = [""] * len(prompts)
-        if 'negative_prompt' in config:
-            negative_prompts = (
-                [config['negative_prompt']]
-                if isinstance(config['negative_prompt'], str) else
-                config['negative_prompt']      
-            )
-
-        prompts_2 = prompts
-        if 'prompt_2' in config:
-            prompts_2 = (
-                [config['prompt_2']]
-                if isinstance(config['prompt_2'], str) else
-                config['prompt_2']      
-            )
-
-        negative_prompts_2 = negative_prompts
-        if 'negative_prompt_2' in config:
-            negative_prompts = (
-                [config['negative_prompt_2']]
-                if isinstance(config['negative_prompt_2'], str) else
-                config['negative_prompt_2']
-            )
-
-        # if len(negative_prompts) != len(prompts):
-        #     negative_prompts *= len(prompts)
-
-        img_id = 0
-        for idx in range(len(prompts)):
-            log_info.add_data(
-                prompts[idx],
-                negative_prompts[idx] or "",
-                prompts_2[idx] or "",
-                negative_prompts_2[idx] or "",
-                config['scheduler_name'],
-                config["num_inference_steps"] if "num_inference_steps" in config else 50,
-                config["guidance_scale"] if "guidance_scale" in config else 7.5,
-                config["clip_skip"] if "clip_skip" in config else None,
-                config["seed"]
-            )
-
-            for n in range(1, num_images_per_prompt + 1):
-                wandb.log({f"Prompt:{idx+1}": wandb.Image(images[img_id])})
-                img_id += 1
-
-        wandb.log({f"Inference results": log_info})
-

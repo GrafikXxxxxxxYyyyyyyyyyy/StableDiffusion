@@ -1,13 +1,16 @@
+import io
+import os
+import json
+import base64
+import requests
+import numpy as np
 import gradio as gr
-
-
-def generate_images():
-    return [["https://via.placeholder.com/150", "Example Image 1"], 
-            ["https://via.placeholder.com/150", "Example Image 2"]] 
+from PIL import Image
 
 
 class App():
     def __init__(self):
+        self.endpoint_id = ""
         self.available_ckpt = {
             "sd15": ["Default", "NeverEndingDream"],
             "sdxl": ["Default", "Juggernaut"], 
@@ -19,6 +22,7 @@ class App():
             "sd3": []
         }
         self.available_schedulers = ["DDIM", "euler", "euler_a", "DPM++ 2M SDE Karras"]
+
         self.launch()
 
 
@@ -26,347 +30,281 @@ class App():
         layout_block = gr.Blocks()
         with layout_block as demo:
             with gr.Tab("Inference"):
+                inference_params = {}
                 ####################################################################################################
-                # Блок выбора модели для генерации
+                # Not renderebel elements
                 ####################################################################################################
-                with gr.Blocks(title="Model Selector"):
-                    with gr.Group():
-                        model_type = gr.Radio(
-                            ["sd15", "sdxl", "sd3"], 
-                            label="Stable Diffusion model type:", 
-                            info="Which model architecture should be used?",
-                            key=1,
-                        )
-                        
-                        with gr.Accordion(label="Generation procedure configuration", open=False):
-                            with gr.Row():
-                                with gr.Column():
-                                    model_name = gr.Dropdown(
-                                        [],
-                                        label="Checkpoint", 
-                                        info="Which model checkpoint you want to use?",
-                                        interactive=True,
-                                        visible=False,
-                                        key=2, 
-                                    )
-
-                                    # use_refiner = gr.Radio(
-                                    #     ["None", "Ensemble of experts", "Two-stage"], 
-                                    #     label="For SDXL models you can choose refiner:", 
-                                    #     info="Which refiner extended pipeline should be used?",
-                                    #     key=3,
-                                    # )
-
-                                selected_loras = gr.CheckboxGroup(
-                                    [],
-                                    label="Available LoRA adapters:", 
-                                    info="Which LoRA adapter you want to use?",
-                                    interactive=True,
-                                    visible=False,
-                                    key=4,
-                                )
-
-
-                            lora_sliders_block = gr.Column(visible=False)
-
-                            # @gr.render(inputs=[selected_loras])
-                            # def lora_sliders(loras=selected_loras, type=model_type):
-                            #     for lora_name in loras:
-                            #         weight = gr.Slider(
-                            #             0, 
-                            #             2.0, 
-                            #             step=0.01, 
-                            #             label=lora_name, 
-                            #             interactive=True, 
-                            #             key=lora_name,
-                            #         )
+                with gr.Blocks(title="Global configuration"):
+                    with gr.Accordion(label="Global configuration:", open=True):
+                        with gr.Row():
+                            model_type = gr.Radio(
+                                ["sd15", "sdxl"], 
+                                label="Stable Diffusion model type:", 
+                                info="Which model architecture should be used?",
+                                value="sd15",
+                                interactive=True,
+                                key="model_type",
+                            )
+                            inference_params["model_type"] = model_type
 
                             with gr.Column():
-                                scheduler = gr.Dropdown(
-                                    self.available_schedulers, 
-                                    label="Scheduler:", 
-                                    info="Which scheduler you want to use for denoising?"
+                                lora_count = gr.Slider(
+                                    minimum=0,
+                                    maximum=4,
+                                    value=0,
+                                    step=1,
+                                    visible=True,
+                                    interactive=True,
+                                    label="Number of using LoRAs:", 
+                                    info="How many LoRAs should be used?",
+                                    key="lora_count",
+                                )
+                                inference_params["lora_count"] = lora_count
+
+                                prompt_examples_count = gr.Slider(
+                                    label="Choose number of prompt examples:",
+                                    minimum=1,
+                                    maximum=4,
+                                    value=1,
+                                    step=1,
+                                    visible=True,
+                                    interactive=True,
+                                    key="prompt_examples_count",
+                                )
+                                inference_params["prompt_examples_count"] = prompt_examples_count
+
+                            task = gr.Radio(
+                                ["Text-To-Image", "Image-To-Image", "Inpainting"],
+                                label="Generation task:",
+                                value="Text-To-Image",
+                                info="Which conditional generation task you want to solve?",
+                                interactive=True,
+                                visible=True,
+                                key="task",
+                            )
+                            inference_params["task"] = task
+                ####################################################################################################
+
+
+                ####################################################################################################
+                # Renderebel elements
+                ####################################################################################################
+                @gr.render(inputs=[model_type, lora_count, prompt_examples_count, task])
+                def rendered_elements(type=model_type, lora_count=lora_count, prompt_examples_count=prompt_examples_count, task=task):
+                    with gr.Blocks(title="Model configuration"):
+                        with gr.Accordion(label="Model configuration:", open=True):
+                            # Чекпоинт и планировщик шума
+                            with gr.Row():
+                                inference_params["model_name"] = gr.Dropdown(
+                                    self.available_ckpt[type],
+                                    label="Checkpoint", 
+                                    info="Which model checkpoint you want to use?",
+                                    interactive=True,
+                                    visible=True,
+                                    key="model_name",
                                 )
 
-                def update_model(type: str):
-                    checkpoints = self.available_ckpt[type]
-                    loras = self.available_loras[type]
-                    
-                    return {
-                        model_name: gr.update(choices=checkpoints, visible=bool(checkpoints)),
-                        selected_loras: gr.update(choices=loras, visible=bool(loras)),
-                        lora_sliders_block: gr.update(visible=True)
-                    }
+                                inference_params["scheduler"] = gr.Dropdown(
+                                    self.available_schedulers, 
+                                    label="Scheduler:", 
+                                    info="Which scheduler you want to use for denoising?",
+                                    key="scheduler",
+                                )
 
-                model_type.change(
-                    update_model,
-                    inputs=model_type,
-                    outputs=[model_name, selected_loras, lora_sliders_block]
-                    # outputs=[model_name, selected_loras]
-                )
+                                if type == "sdxl":
+                                    inference_params["use_refiner"] = gr.Radio(
+                                        ["None", "Ensemble of experts", "Two-stage"], 
+                                        label="For SDXL models you can choose refiner:", 
+                                        info="Which refiner extended pipeline should be used?",
+                                        key="use_refiner",
+                                    )
 
-                def update_sliders(loras):
-                    new_sliders = [
-                        gr.Slider(0, 2.0, 0.01, label=lora_name, visible=True)
-                        for lora_name in loras
-                    ]
-                    return {
-                        lora_sliders_block: gr.update(new_sliders, visible=bool(new_sliders)),
-                    }
-                
-                selected_loras.change(
-                    update_sliders,
-                    inputs=selected_loras,
-                    outputs=lora_sliders_block
-                )
-                ####################################################################################################
+                            # Все нужные лоры
+                            with gr.Row():
+                                loras = []
+                                scales = []
+                                for i in range(lora_count):
+                                    with gr.Group():
+                                        with gr.Column():
+                                            loras.append(gr.Dropdown(
+                                                self.available_loras[type],
+                                                label="LoRA", 
+                                                info="Which LoRA you want to use?",
+                                                interactive=True,
+                                                visible=True,
+                                            ))
 
-
-                ####################################################################################################
-                # Блок для выбора параметров генерации
-                ####################################################################################################
-                with gr.Blocks(title="Params selector"):
-                    with gr.Group():
-                        task = gr.Radio(
-                            ["Text-To-Image", "Image-To-Image", "Inpainting"],
-                            label="Generation task:",
-                            info="Which conditional generation task you want to solve?",
-                            interactive=True,
-                            visible=True,
-                        )
-
-                        with gr.Accordion(label="Generation procedure configuration", open=False):
-                            @gr.render(inputs=task)
-                            def generation_params_renderer(task=task):
-                                with gr.Row():
-                                    # with gr.Column():
-                                    with gr.Blocks() and gr.Group():
-                                        num_inference_steps = gr.Slider(
-                                            label="Choose number of inference steps",
-                                            minimum=0,
-                                            maximum=100,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        guidance_scale = gr.Slider(
-                                            label="Choose guidadnce scale:",
-                                            minimum=0,
-                                            maximum=15,
-                                            step=0.1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        cross_attention_kwargs = gr.Slider(
-                                            label="Select LoRA's strength which apply to the text encoder:",
-                                            minimum=0,
-                                            maximum=1.0,
-                                            step=0.01,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        clip_skip = gr.Slider(
-                                            label="Select number of text encoder layers to be skipped:",
-                                            minimum=0,
-                                            maximum=4,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        seed = gr.Slider(
-                                            label="Seed for generating pictures:",
-                                            minimum=-1,
-                                            maximum=1000000000,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        width = gr.Slider(
-                                            label="Width:",
-                                            minimum=256,
-                                            maximum=2048,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-                                        
-                                        height = gr.Slider(
-                                            label="Height:",
-                                            minimum=256,
-                                            maximum=2048,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        num_images_per_prompt = gr.Slider(
-                                            label="Choose the number of images per prompt:",
-                                            minimum=1,
-                                            maximum=16,
-                                            step=1,
-                                            visible=True,
-                                            interactive=True,
-                                        )
-
-                                        if task is not None and task != "Text-To-Image":
-                                            strength = gr.Slider(
-                                                label="Strength:",
-                                                minimum=0,
-                                                maximum=1.0,
+                                            scales.append(gr.Slider(
+                                                minimum=0.0,
+                                                maximum=1.2,
+                                                value=0.7,
                                                 step=0.01,
                                                 visible=True,
                                                 interactive=True,
-                                            )
+                                            ))
 
-                                    if task is not None and task != "Text-To-Image":
-                                        with gr.Column():
-                                            input_image = gr.ImageEditor(
-                                                sources='upload',
-                                                height='auto',
-                                                label="Upload",
-                                            )
-                                                    
+                            # Все нужные параметры для выбранной задачи
+                            with gr.Row():
+                                with gr.Accordion(label="Generation parameters:", open=True):
+                                    with gr.Group():
+                                        inference_params["num_inference_steps"] = gr.Slider(
+                                            label="Choose number of inference steps",
+                                            minimum=0,
+                                            maximum=100,
+                                            value=30,
+                                            step=1,
+                                            visible=True,
+                                            interactive=True,
+                                            key='num_inference_steps'
+                                        )
 
-                            # with gr.Row():
-                            #     with gr.Column():
-                            #         with gr.Group():
-                            #             num_inference_steps = gr.Slider(
-                            #                 label="Choose number of inference steps",
-                            #                 minimum=0,
-                            #                 maximum=100,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["guidance_scale"] = gr.Slider(
+                                            label="Choose guidadnce scale:",
+                                            minimum=0,
+                                            maximum=15,
+                                            value=7,
+                                            step=0.1,
+                                            visible=True,
+                                            interactive=True,
+                                            key="guidance_scale",
+                                        )
 
-                            #             guidance_scale = gr.Slider(
-                            #                 label="Choose guidadnce scale:",
-                            #                 minimum=0,
-                            #                 maximum=15,
-                            #                 step=0.1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["cross_attention_kwargs"] = gr.Slider(
+                                            label="Select LoRA's strength which apply to the text encoder:",
+                                            minimum=0,
+                                            maximum=1.0,
+                                            value=1.0,
+                                            step=0.01,
+                                            visible=True,
+                                            interactive=True,
+                                            key="cross_attention_kwargs",
+                                        )
 
-                            #             cross_attention_kwargs = gr.Slider(
-                            #                 label="Select LoRA's strength which apply to the text encoder:",
-                            #                 minimum=0,
-                            #                 maximum=1.0,
-                            #                 step=0.01,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["clip_skip"] = gr.Slider(
+                                            label="Clip skip:",
+                                            minimum=0,
+                                            maximum=4,
+                                            value=0,
+                                            step=1,
+                                            visible=True,
+                                            interactive=True,
+                                            key="clip_skip",
+                                        )
 
-                            #             clip_skip = gr.Slider(
-                            #                 label="Select number of text encoder layers to be skipped:",
-                            #                 minimum=0,
-                            #                 maximum=4,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["seed"] = gr.Slider(
+                                            label="Seed:",
+                                            minimum=-1,
+                                            maximum=1000000000,
+                                            value=-1,
+                                            step=1,
+                                            visible=True,
+                                            interactive=True,
+                                            key="seed",
+                                        )
 
-                            #             seed = gr.Slider(
-                            #                 label="Seed for generating pictures:",
-                            #                 minimum=-1,
-                            #                 maximum=1000000000,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
-
-                            #             width = gr.Slider(
-                            #                 label="Width:",
-                            #                 minimum=256,
-                            #                 maximum=2048,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["width"] = gr.Slider(
+                                            label="Width:",
+                                            minimum=256,
+                                            maximum=2048,
+                                            value=768,
+                                            step=8,
+                                            visible=True,
+                                            interactive=True,
+                                            key="width",
+                                        )
                                         
-                            #             height = gr.Slider(
-                            #                 label="Height:",
-                            #                 minimum=256,
-                            #                 maximum=2048,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["height"] = gr.Slider(
+                                            label="Height:",
+                                            minimum=256,
+                                            maximum=2048,
+                                            value=768,
+                                            step=8,
+                                            visible=True,
+                                            interactive=True,
+                                            key="height",
+                                        )
 
-                            #             num_images_per_prompt = gr.Slider(
-                            #                 label="Choose the number of images per prompt:",
-                            #                 minimum=1,
-                            #                 maximum=16,
-                            #                 step=1,
-                            #                 visible=True,
-                            #                 interactive=True,
-                            #             )
+                                        inference_params["num_images_per_prompt"] = gr.Slider(
+                                            label="Batch size:",
+                                            minimum=1,
+                                            maximum=16,
+                                            value=1,
+                                            step=1,
+                                            visible=True,
+                                            interactive=True,
+                                            key="num_images_per_prompt",
+                                        )
 
-                            #             strength = gr.Slider(
-                            #                 label="Strength:",
-                            #                 minimum=0,
-                            #                 maximum=1.0,
-                            #                 step=0.01,
-                            #                 visible=False,
-                            #                 interactive=False,
-                            #             )
+                                        if task is not None and task != "Text-To-Image":
+                                            inference_params["strength"] = gr.Slider(
+                                                label="Strength:",
+                                                minimum=0,
+                                                maximum=1.0,
+                                                value=1.0,
+                                                step=0.01,
+                                                visible=True,
+                                                interactive=True,
+                                                key="strength",
+                                            )
+                                
+                                if task is not None and task != "Text-To-Image":
+                                    with gr.Accordion(label="Input image:", open=True):
+                                        inference_params["input_image"] = gr.ImageEditor(
+                                            sources=('upload'), 
+                                            layers=True if task == "Inpainting" else False,
+                                            type='pil',
+                                            key="input_image",
+                                        )
 
-                            #     @gr.render(inputs=task)
-                            #     def extra_parameters_renderer(task=task):
-                            #         if task is not None and task != "Text-To-Image":                                   
-                            #             with gr.Column():
-                            #                 input_image = gr.ImageEditor(
-                            #                     sources='upload',
-                            #                     # tool='sketch',
-                            #                     label="Upload",
-                            #                 )
-
-                            #             return {
-                            #                 strength: gr.update(visible=True, interactive=True)
-                            #             }
-                ####################################################################################################
-
-
-                ####################################################################################################
-                # Блок для выбора количества промптов и количество различных вариантов генерации
-                ####################################################################################################
-
-                ####################################################################################################
-
-                
-                ####################################################################################################
-                # Тупо отдельная кнопочка для генерации
-                ####################################################################################################
-                with gr.Blocks(title="Generate button"):
-                    GENERATE = gr.Button(
-                        value="Generate",
-                        visible=True,
-                        interactive=True,
-                    )
-                ####################################################################################################
-                
-                
-                ####################################################################################################
-                # TODO: ВОТ этот блок тоже имеет смысл сделать адаптивным
-                # чтобы количество галерей картинок зависило от количества промптов
-                ####################################################################################################
-                with gr.Blocks(title="Output results"):
-                    output = gr.Gallery(
-                        label="Generated images", 
-                        show_label=True, 
-                        object_fit="contain", 
-                        height="auto",
-                    )
-
-                    GENERATE.click(fn=generate_images, outputs=output)
-                ####################################################################################################
+                        # Задание промптов
+                        with gr.Accordion(label="Promts:", open=True):
+                            prompts = []
+                            negative_prompts = []
+                            with gr.Row():
+                                for i in range(int(prompt_examples_count)):
+                                    with gr.Column():
+                                        prompts.append(gr.Textbox(
+                                            label=f"Prompt example {i+1}:",
+                                            key=f"prompt_{i}",
+                                        ))
+                                        negative_prompts.append(gr.Textbox(
+                                            label=f"Negative prompt example {i+1}:",
+                                            key=f"negative_prompt_{i}",
+                                        ))
+                            
+                        # Кнопка для отправки реквеста
+                        GENERATE = gr.Button(
+                            value="Generate",
+                            visible=True,
+                            interactive=True,
+                        )
+                        
+                        # Аутпут полученных результатов
+                        with gr.Row():
+                            outputs = []
+                            for i in range(int(prompt_examples_count)):
+                                outputs.append(gr.Gallery(
+                                    label="Generated images", 
+                                    show_label=True, 
+                                    object_fit="contain", 
+                                    height="auto",
+                                ))
                     
-            
+                    # Сохраняем ключи и значения для передачи в конфиг
+                    btn_input = [
+                        gr.State(value=list(inference_params.keys())),
+                    ] + list(inference_params.values()) + loras + scales + prompts + negative_prompts
+
+                    GENERATE.click(
+                        self.create_and_send_request,
+                        inputs=btn_input,
+                        # outputs=outputs,
+                        outputs=[],
+                    )
+                ####################################################################################################
+                            
+
+
             with gr.Tab("Train"):
                 gr.Markdown("Когда-нибудь я сделаю UI и для обучения моделей")
                 gr.Markdown("Не то что бы нам очень надо, но просто интересно дать за щёку Kohya_ss")
@@ -375,5 +313,95 @@ class App():
         demo.launch()
 
 
+    def create_and_send_request(self, keys, *args):
+        inference_params = dict(zip(keys, list(args[:len(keys)])))
+        lora_count = inference_params["lora_count"]
+        task = inference_params["task"]
+        prompt_examples_count = inference_params["prompt_examples_count"]
+        
+        # Учитываем выбранные лоры
+        lora_names, lora_scales = [], []
+        for i in range(lora_count):
+            if args[len(keys)+i] != []:
+                lora_names.append(args[len(keys)+i])
+                lora_scales.append(args[len(keys)+i+lora_count])
+        loras = dict(zip(lora_names, lora_scales))
+            
+        # Соберём конфиг модели
+        model = {
+            "type": inference_params["model_type"],
+            "name": inference_params["model_name"],
+            "scheduler": inference_params["scheduler"],
+        }
+        if loras != {}:
+            model["loras"] = loras
+
+        # Соберём конфиг базовых параметров генерации
+        params = {
+            "num_inference_steps": inference_params["num_inference_steps"],
+            "guidance_scale": inference_params["guidance_scale"],
+            "cross_attention_kwargs": {"scale": inference_params["cross_attention_kwargs"]},
+            "height": inference_params["height"],
+            "width": inference_params["width"],
+            "num_images_per_prompt": inference_params["num_images_per_prompt"],
+        }
+        if inference_params["clip_skip"] != 0:
+            params["clip_skip"] = inference_params["clip_skip"]
+        if inference_params["seed"] != -1:
+            params["seed"] = inference_params["seed"]
+        # if task != "Text-To-Image":
+        #     pil_img = inference_params["input_image"]["layers"][0].convert("RGB")
+        #     buffer = io.BytesIO()
+        #     pil_img.save(buffer, format="JPEG")s
+        #     base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        #     params["image"] = base64_str
+        #     params["strength"] = inference_params["strength"]
+
+        #     if task == "Inpainting":
+        #         pil_img = inference_params["input_image"]["layers"][1].convert("RGB")
+        #         buffer = io.BytesIO()
+        #         pil_img.save(buffer, format="JPEG")
+        #         base64_str_mask = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        #         params["mask_image"] = base64_str_mask
+
+        # Собираем промпты
+        prompt, negative_prompt = [], []
+        for i in range(prompt_examples_count) :
+            prompt.append(args[len(keys) + 2*lora_count + i])
+            negative_prompt.append(args[len(keys) + 2*lora_count + prompt_examples_count + i])
+
+        # Собираем полностью весь конфиг для генерации
+        input_request = {
+            "model": model,
+            "params": params,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+        }
+        # response = self.request_to_endpoint({"input": input_request})
+        self.save_last_request({"input": input_request})
+
+    
+    def request_to_endpoint(self, request):
+        api_key = os.getenv("RUNPOD_API_KEY")
+        url = f"https://api.runpod.ai/v2/{self.endpoint_id}/runsync"
+        headers = {
+            "accept": "application/json",
+            "authorization": api_key,
+            "content-type": "application/json"
+        }
+        response = requests.post(url, headers=headers, data=json.dumps(request)) 
+
+        return response
+        
+
+    def save_last_request(self, request):
+        with open("input_request.json", 'w') as file:
+            json.dump(request, file)
+
+
 
 app = App()
+
+

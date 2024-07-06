@@ -14,29 +14,8 @@ torch.cuda.empty_cache()
 # Select device to run model on
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Опять же пока не решено, что делать с хранилищем, пусть будет так
-# def preload_models(checkpoits: list, need_loras=True):
-#     # Подгружаем в кеш все модели из тех что имеем
-#     model: SDModelWrapper
-    # for ckpt in checkpoits:
-    #     model = SDModelWrapper(device=DEVICE, model_type='sdxl', model_name=ckpt)
-#     # Аналогично поступаем с лорами если надо
-#     if need_loras:
-#         hf_path = "OnMoon/loras"
-#         files = HfFileSystem().ls(hf_path, detail=False)
-#         for file in files:
-#             if file.endswith(".safetensors") and file.startswith(f"{hf_path}/sdxl_"):
-#                 lora_weights = hf_hub_download(
-#                     repo_id = hf_path,
-#                     filename = file[len(f"{hf_path}/"):],
-#                 )
-# preload_models(['AutismMix', 'Juggernaut', 'AnimaPencil'], need_loras=False)
-
 # Initialize default model
-MODEL = SDModelWrapper(device=DEVICE, model_type='sdxl', model_name='AnimaPencil')
-# models = {
-#     "ckpt_url": SDModelWrapper("ckpt_url", device=DEVICE)
-# }
+MODEL = SDModelWrapper(device=DEVICE, model_type='sdxl', model_name='Juggernaut')
 
 # Initialize Handler class
 HANDLER = Handler(device=DEVICE)

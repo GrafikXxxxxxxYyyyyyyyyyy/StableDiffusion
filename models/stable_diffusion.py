@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -40,17 +41,9 @@ from typing import Any, Callable, Dict, List, Optional, Union
 class SDModelWrapper():
     def __init__(
         self,
-        ckpt_path:Optional[str] = None,
-        vae: Optional[AutoencoderKL] = None,
-        base: Optional[UNet2DConditionModel] = None,
-        text_encoder: Optional[CLIPTextModel] = None,
-        tokenizer: Optional[CLIPTokenizer] = None,
-        scheduler: Optional[KarrasDiffusionSchedulers] = None,
-        text_encoder_2: Optional[CLIPTextModelWithProjection] = None,
-        tokenizer_2: Optional[CLIPTokenizer] = None,
-        refiner: Optional[UNet2DConditionModel] = None,
-        model_name: Optional[str] = None,
+        ckpt_path: Optional[str] = None,
         model_type: Optional[str] = None,
+        model_name: Optional[str] = None,
         device: str = "cuda"
     ):  
         """
@@ -74,18 +67,20 @@ class SDModelWrapper():
                 None
             )
             # self.load_refiner()
-
-        # Сначала смотрим не нужно ли грузить свой чекпоинт
-        if model_name is not None and isinstance(model_name, str):
-            ckpt_path = f"OnMoon/sd15_{model_name}"
-            if model_type is not None and isinstance(model_type, str):
-                ckpt_path = f"OnMoon/{model_type}_{model_name}" 
-
-        # Есл не нужно загрузить переданный чекпоинт, то ставится по умолчанию
+        
+        # Если не указан чекпоинт, то должны быть указаны тип модели и имя чекпоинта
         if ckpt_path is None:
-            ckpt_path = "runwayml/stable-diffusion-v1-5"
-            if model_type is not None and isinstance(model_type, str):
-                ckpt_path = "stabilityai/stable-diffusion-xl-base-1.0"                 
+            type = model_type or "sd15"
+            # Если имя не указано, то грузим по дефолту
+            if model_name is None:
+                if type == "sd15":
+                    ckpt_path = "runwayml/stable-diffusion-v1-5"
+                elif type == "sdxl":
+                    ckpt_path = "stabilityai/stable-diffusion-xl-base-1.0"
+                else:
+                    raise ValueError(f"Unknown type {type}")
+            else:
+                ckpt_path = f"GrafikXxxxxxxYyyyyyyyyyy/{type}_{model_name}"     
         
         # Грузим модель из выбранного чекпоинта
         self.load_hf_checkpoint(ckpt_path)
@@ -98,8 +93,8 @@ class SDModelWrapper():
             vae_scale_factor=self.vae_scale_factor, do_normalize=False, do_binarize=True, do_convert_grayscale=True
         )
         self.scheduler_name = 'euler'
-        self.name = model_name or None
         self.type = model_type or "sd15"
+        self.name = model_name or None
         self.path = ckpt_path
 
 
@@ -236,14 +231,23 @@ class SDModelWrapper():
             loras = loras
         
         current_adapters_list = [] if self.get_list_adapters() == {} else self.get_list_adapters()['base']
-        # TODO: Set logic 
-        self.delete_adapters(current_adapters_list)
-        for lora_name in list(loras.keys()):
-            lora_weights = hf_hub_download(
-                repo_id = 'OnMoon/loras',
-                filename = f"{self.type}_{lora_name}.safetensors",
-            )
-            self.load_lora_weights(lora_weights, adapter_name=lora_name)
+        new_adapters_list = list(loras.keys())
+
+         # Удаление адаптеров только если списки адаптеров не совпадают
+        if set(current_adapters_list) != set(new_adapters_list):
+            self.delete_adapters(current_adapters_list)
+    
+            for lora_name in new_adapters_list:
+                lora_path = f"models/loras/{self.type}_{lora_name}.safetensors"
+                # Если нужной лоры нет в скачанных, то качаем
+                if not os.path.exists(lora_path):
+                    hf_hub_download(
+                        repo_id = 'GrafikXxxxxxxYyyyyyyyyyy/loras',
+                        filename = f"{self.type}_{lora_name}.safetensors",
+                        local_dir = lora_path,
+                    )
+
+                self.load_lora_weights(lora_path, adapter_name=lora_name)
 
         print(f"LoRA adapters has successfully changed to:\n{loras}")
         self.set_adapters(list(loras.keys()), list(loras.values()))

@@ -1,0 +1,36 @@
+{
+    "input": {
+        
+        "model": {
+            "type": "sdxl",
+            "name": "Juggernaut",
+            "scheduler": "DPM++ 2M SDE Karras",
+            "loras": {
+                "tsunade": 0.71,
+                "melanie": 0.25
+            }
+        },
+
+        "params": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7,
+            "cross_attention_kwargs": {
+                "scale": 1
+            },
+            "height": 1016,
+            "width": 1016,
+            "num_images_per_prompt": 4,
+            "clip_skip": 1,
+            "seed": 113888680
+        },
+
+        "prompt": [
+            "s`dzfxcg",
+            "szdxfcg"
+        ],
+        "negative_prompt": [
+            "`dszfxbcv ",
+            "szdxcfv"
+        ]
+    }
+}

@@ -1,0 +1,34 @@
+{
+    "input": {
+        "mode": "inference", 
+
+        "model": {
+            "type": "sdxl",
+            "name": "Juggernaut",
+            "scheduler": "DPM++ 2M SDE Karras",
+            "loras": {
+                "melanie": 0.75
+            }
+        },
+
+        "params": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7,
+            "cross_attention_kwargs": {
+                "scale": 1.0
+            },
+            "clip_skip": 2,
+            "seed": 80085
+        },
+        
+        "prompt": [
+            "Park Min-young, 1girl, blond hair, posing"
+        ],
+        "negative_prompt": [
+            "bad arms, bad faces, bad legs"
+        ],
+        "height": 768,
+        "width": 768,
+        "num_images_per_prompt": 1
+    }
+}
