@@ -185,7 +185,6 @@ class StableDiffusionUnifiedPipeline():
             lora_scale=text_encoder_lora_scale,
             clip_skip=clip_skip,
         )
-        print(prompt_embeds.shape, negative_prompt_embeds.shape, pooled_prompt_embeds.shape, negative_pooled_prompt_embeds.shape)
         
         # 3. set timesteps
         timesteps, num_inference_steps = retrieve_timesteps(
@@ -236,8 +235,6 @@ class StableDiffusionUnifiedPipeline():
                 # 6. Prepare latent variables
                 add_noise = True if denoising_start is None else False
                 latents = self.prepare_latents_img2img(
-                    model.vae,
-                    model.scheduler,
                     image,
                     latent_timestep,
                     batch_size,
@@ -760,6 +757,11 @@ class StableDiffusionUnifiedPipeline():
 
         image = image.to(device=self.device, dtype=dtype)
         batch_size = batch_size * num_images_per_prompt
+        generator = (
+            torch.Generator(device=self.device).manual_seed(int(seed)) 
+            if seed is not None else 
+            None
+        )
 
         # Если изображение уже в формате латентов (имеет 4 канала), то оно используется как начальные латенты.
         if image.shape[1] == 4:
@@ -767,21 +769,17 @@ class StableDiffusionUnifiedPipeline():
         # Если изображение не в формате латентов, кодирует изображение в латентное представление с использованием VAE
         else:
             # Апкастим ВАЕ, если это необходимо
-            if self.vae.config.force_upcast:
+            if self.model.vae.config.force_upcast:
                 image = image.float()
-                self.vae.to(dtype=torch.float32)
+                self.model.vae.to(dtype=torch.float32)
 
-            generator = None
-            if seed is not None:
-                generator = torch.Generator(device=self.device).manual_seed(int(seed))
+            init_latents = retrieve_latents(self.model.vae.encode(image), generator=generator)
 
-            init_latents = retrieve_latents(self.vae.encode(image), generator=generator)
-
-            if self.vae.config.force_upcast:
-                self.vae.to(dtype)
+            if self.model.vae.config.force_upcast:
+                self.model.vae.to(dtype)
 
             init_latents = init_latents.to(dtype)
-            init_latents = self.vae.config.scaling_factor * init_latents
+            init_latents = self.model.vae.config.scaling_factor * init_latents
 
         
         # Тупо выравнивает размеры батчей
@@ -806,11 +804,12 @@ class StableDiffusionUnifiedPipeline():
                 dtype=dtype
             )
             # get latents
-            init_latents = self.scheduler.add_noise(init_latents, noise, timestep)
+            init_latents = self.model.scheduler.add_noise(init_latents, noise, timestep)
 
         latents = init_latents
 
         return latents
+
 
 
     def prepare_latents_inpaint(
@@ -882,6 +881,7 @@ class StableDiffusionUnifiedPipeline():
         return outputs   
     
 
+
     def prepare_mask_latents(
         self, 
         mask, 
@@ -939,6 +939,7 @@ class StableDiffusionUnifiedPipeline():
             masked_image_latents = masked_image_latents.to(device=self.device, dtype=dtype)
 
         return mask, masked_image_latents
+
 
 
     def _get_add_time_ids(

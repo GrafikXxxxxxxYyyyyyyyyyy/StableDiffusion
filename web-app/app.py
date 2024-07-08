@@ -12,9 +12,9 @@ class App():
     def __init__(self):
         self.endpoint_id = ""
         self.available_ckpt = {
-            "sd15": ["Default", "NeverEndingDream"],
+            "sd15": ["Default", "NeverEndingDream", "AnyLoRA"],
             "sdxl": ["Default", "Juggernaut"], 
-            "sd3": []
+            # "sd3": []
         }
         self.available_loras = {
             "sd15": ['ciri', 'makima'],
@@ -251,8 +251,13 @@ class App():
                                     with gr.Accordion(label="Input image:", open=True):
                                         inference_params["input_image"] = gr.ImageEditor(
                                             sources=('upload'), 
-                                            layers=True if task == "Inpainting" else False,
-                                            type='pil',
+                                            layers=False,
+                                            brush=(
+                                                gr.Brush(colors=["#FFFFFF"], color_mode="fixed")
+                                                if task == "Inpainting" else
+                                                None
+                                            ),
+                                            type='numpy',
                                             key="input_image",
                                         )
 
@@ -304,12 +309,10 @@ class App():
                 ####################################################################################################
                             
 
-
             with gr.Tab("Train"):
                 gr.Markdown("Когда-нибудь я сделаю UI и для обучения моделей")
                 gr.Markdown("Не то что бы нам очень надо, но просто интересно дать за щёку Kohya_ss")
         
-        # Launch the Application!
         demo.launch()
 
 
@@ -349,22 +352,34 @@ class App():
             params["clip_skip"] = inference_params["clip_skip"]
         if inference_params["seed"] != -1:
             params["seed"] = inference_params["seed"]
-        # if task != "Text-To-Image":
-        #     pil_img = inference_params["input_image"]["layers"][0].convert("RGB")
-        #     buffer = io.BytesIO()
-        #     pil_img.save(buffer, format="JPEG")s
-        #     base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        if task == "Image-To-Image":
+            # Берём саму картинку
+            img = np.ascontiguousarray(inference_params["input_image"]["composite"])
+            pil_img = Image.fromarray(img).convert("RGB")
+            buffer = io.BytesIO()
+            pil_img.save(buffer, format="JPEG")
+            base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-        #     params["image"] = base64_str
-        #     params["strength"] = inference_params["strength"]
+            params["image"] = base64_str
+            params["strength"] = inference_params["strength"]
+        if task == "Inpainting":
+            # Берём саму картинку
+            img = np.ascontiguousarray(inference_params["input_image"]["background"])
+            pil_img = Image.fromarray(img).convert("RGB")
+            buffer = io.BytesIO()
+            pil_img.save(buffer, format="JPEG")
+            base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            # Берём маску
+            img_mask = np.ascontiguousarray(inference_params["input_image"]["layers"][0])
+            pil_img_mask = Image.fromarray(img_mask).convert("RGB")
+            buffer_mask = io.BytesIO()
+            pil_img_mask.save(buffer_mask, format="JPEG")
+            base64_str_mask = base64.b64encode(buffer_mask.getvalue()).decode('utf-8')
 
-        #     if task == "Inpainting":
-        #         pil_img = inference_params["input_image"]["layers"][1].convert("RGB")
-        #         buffer = io.BytesIO()
-        #         pil_img.save(buffer, format="JPEG")
-        #         base64_str_mask = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        #         params["mask_image"] = base64_str_mask
+            params["image"] = base64_str
+            params["mask_image"] = base64_str_mask
+            params["strength"] = inference_params["strength"]
 
         # Собираем промпты
         prompt, negative_prompt = [], []
@@ -379,6 +394,8 @@ class App():
             "prompt": prompt,
             "negative_prompt": negative_prompt,
         }
+
+        # Отправляем запрос
         # response = self.request_to_endpoint({"input": input_request})
         self.save_last_request({"input": input_request})
 
@@ -397,7 +414,7 @@ class App():
         
 
     def save_last_request(self, request):
-        with open("input_request.json", 'w') as file:
+        with open("test_input.json", 'w') as file:
             json.dump(request, file)
 
 

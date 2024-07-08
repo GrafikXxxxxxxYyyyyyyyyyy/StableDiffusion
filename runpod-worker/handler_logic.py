@@ -29,28 +29,6 @@ def convert_pt_to_numpy(images: torch.Tensor) -> List[np.ndarray]:
     return np_images
 
 
-def save_and_upload_images(images, job_id):
-    os.makedirs(f"/{job_id}", exist_ok=True)
-
-    image_urls = []
-    for index, image in enumerate(images):
-        image_path = os.path.join(f"/{job_id}", f"{index}.png")
-        plt.imsave(image_path, image)
-
-        if os.environ.get('BUCKET_ENDPOINT_URL', False):
-            image_url = rp_upload.upload_image(job_id, image_path)
-            image_urls.append(image_url)
-        else:
-            with open(image_path, "rb") as image_file:
-                image_data = base64.b64encode(
-                    image_file.read()).decode("utf-8")
-                image_urls.append(f"data:image/png;base64,{image_data}")
-
-    rp_cleanup.clean([f"/{job_id}"])
-
-    return image_urls
-
-
 class Handler():
     def __init__(self, device="cuda"): 
         self.device = device
@@ -101,6 +79,7 @@ class Handler():
 
 
     def maybe_reload_model(self, model_config):
+        # Если указан чекпоинт, то грузит из него
         if "ckpt_path" in list(model_config.keys()):
             self.model.reload(ckpt_path=model_config["ckpt_path"])            
         else:
@@ -146,8 +125,9 @@ class Handler():
 
         # Обработка изображений если те присутствуют в конфиге
         if "image" in list(inference_config.keys()):
-            # inference_config["image"] = 
-            pass
+            inference_config["image"] = Image.open(io.BytesIO(base64.b64decode(inference_config["image"])))
+        if "mask_image" in list(inference_config.keys()):
+            inference_config["mask_image"] = Image.open(io.BytesIO(base64.b64decode(inference_config["mask_image"])))
 
         images = pipeline(self.model, **inference_config)
         if isinstance(images, torch.Tensor):
