@@ -18,10 +18,11 @@ RUN pip install hf_transfer
 ENV HF_HUB_ENABLE_HF_TRANSFER=0
 
 # Cache checkpoints
-RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline; StableDiffusionXLPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_AnyLoRA', torch_dtype=torch.float16, variant='fp16')"
-RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline; StableDiffusionXLPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_Reliberate', torch_dtype=torch.float16, variant='fp16')"
-RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline; StableDiffusionXLPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_DreamShaper', torch_dtype=torch.float16, variant='fp16')"
-RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline; StableDiffusionXLPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_NeverEndingDream', torch_dtype=torch.float16, variant='fp16')"
+RUN python3.11 -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_AnyLoRA', torch_dtype=torch.float16, variant='fp16')"
+RUN python3.11 -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_Reliberate', torch_dtype=torch.float16, variant='fp16')"
+RUN python3.11 -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_DreamShaper', torch_dtype=torch.float16, variant='fp16')"
+RUN python3.11 -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sd15_NeverEndingDream', torch_dtype=torch.float16, variant='fp16')"
+RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline; StableDiffusionXLPipeline.from_pretrained('GrafikXxxxxxxYyyyyyyyyyy/sdxl_Juggernaut', torch_dtype=torch.float16, variant='fp16')"
 
 # Cache LoRAs
 # <HERE>

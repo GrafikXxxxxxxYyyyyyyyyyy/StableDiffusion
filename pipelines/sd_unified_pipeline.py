@@ -26,9 +26,6 @@ from diffusers import (
 
 
 
-########################################################################################################################
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
-########################################################################################################################
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     """
     Rescale `noise_cfg` according to `guidance_rescale`. Based on findings of [Common Diffusion Noise Schedules and
@@ -41,7 +38,6 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
     noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
     return noise_cfg
-########################################################################################################################
 
 
 def retrieve_timesteps(
@@ -96,7 +92,6 @@ def retrieve_latents(
 
 def denoising_value_valid(dnv):
     return isinstance(dnv, float) and 0 < dnv < 1
-
 
 
 
@@ -225,7 +220,7 @@ class StableDiffusionUnifiedPipeline():
                 image = model.image_processor.preprocess(image)
 
                 timesteps, num_inference_steps = self.get_timesteps(
-                    model.scheduler,
+                    self.model.scheduler,
                     num_inference_steps,
                     strength,
                     denoising_start if denoising_value_valid(denoising_start) else None,
@@ -254,35 +249,8 @@ class StableDiffusionUnifiedPipeline():
             # Ну и если есть и картинка и маска --> inpainting
             ########################################################################################################################################
             else:
-                # 5. Preprocess mask and image
-                if padding_mask_crop is not None:
-                    crops_coords = model.mask_processor.get_crop_region(mask_image, width, height, pad=padding_mask_crop)
-                    resize_mode = "fill"
-                else:
-                    crops_coords = None
-                    resize_mode = "default"
-
-                original_image = image
-                init_image = model.image_processor.preprocess(
-                    image, height=height, width=width, crops_coords=crops_coords, resize_mode=resize_mode
-                )
-                init_image = init_image.to(dtype=torch.float32)
-
-                mask = model.mask_processor.preprocess(
-                    mask_image, height=height, width=width, resize_mode=resize_mode, crops_coords=crops_coords
-                )
-
-                if masked_image_latents is not None:
-                    masked_image = masked_image_latents
-                elif init_image.shape[1] == 4:
-                    # if images are in latent space, we can't mask it
-                    masked_image = None
-                else:
-                    masked_image = init_image * (mask < 0.5)
-
-
                 timesteps, num_inference_steps = self.get_timesteps(
-                    model.scheduler,
+                    self.model.scheduler,
                     num_inference_steps,
                     strength,
                     denoising_start if denoising_value_valid(denoising_start) else None,
@@ -299,23 +267,51 @@ class StableDiffusionUnifiedPipeline():
                 is_strength_max = strength == 1.0
 
 
+                # 5. Preprocess mask and image
+                #  Ваще не понятно, что это за параметр
+                if padding_mask_crop is not None:
+                    crops_coords = self.model.mask_processor.get_crop_region(mask_image, width, height, pad=padding_mask_crop)
+                    resize_mode = "fill"
+                else:
+                    crops_coords = None
+                    resize_mode = "default"
+
+                init_image = self.model.image_processor.preprocess(
+                    image, height=height, width=width, crops_coords=crops_coords, resize_mode=resize_mode
+                )
+                init_image = init_image.to(dtype=torch.float32)
+
+                mask = self.model.mask_processor.preprocess(
+                    mask_image, height=height, width=width, resize_mode=resize_mode, crops_coords=crops_coords
+                )
+
+                # Получаем маскированное изображение
+                if masked_image_latents is not None:
+                    masked_image = masked_image_latents
+                elif init_image.shape[1] == 4:
+                    # if images are in latent space, we can't mask it
+                    masked_image = None
+                else:
+                    masked_image = init_image * (mask < 0.5)
+
+                
                 # 6. Prepare latent variables
-                num_channels_latents = model.vae.config.latent_channels
-                num_channels_unet = model.base.config.in_channels
+                num_channels_latents = self.model.vae.config.latent_channels
+                num_channels_unet = self.model.base.config.in_channels
                 return_image_latents = num_channels_unet == 4
 
                 add_noise = True if denoising_start is None else False
                 shape = (
                     batch_size * num_images_per_prompt,
                     num_channels_latents,
-                    height // model.vae_scale_factor,
-                    width // model.vae_scale_factor,
+                    height // self.model.vae_scale_factor,
+                    width // self.model.vae_scale_factor,
                 )
                 latents_outputs = self.prepare_latents_inpaint(
-                    model.scheduler,
+                    self.model.scheduler,
                     shape,
                     prompt_embeds.dtype,
-                    seed,                
+                    seed,
                     latents,
                     image=init_image,
                     timestep=latent_timestep,
@@ -336,12 +332,11 @@ class StableDiffusionUnifiedPipeline():
                     mask,
                     masked_image,
                     batch_size * num_images_per_prompt,
-                    height // model.vae_scale_factor,
-                    width // model.vae_scale_factor,
+                    height,
+                    width,
                     prompt_embeds.dtype,
-                    seed,
+                    seed=None, 
                 )
-                print(f"Inpainting latents: {latents.shape}")
 
 
                 # 8. Check that sizes of mask, masked image and latents match
@@ -349,17 +344,17 @@ class StableDiffusionUnifiedPipeline():
                     # default case for runwayml/stable-diffusion-inpainting
                     num_channels_mask = mask.shape[1]
                     num_channels_masked_image = masked_image_latents.shape[1]
-                    if num_channels_latents + num_channels_mask + num_channels_masked_image != model.base.config.in_channels:
+                    if num_channels_latents + num_channels_mask + num_channels_masked_image != self.model.base.config.in_channels:
                         raise ValueError(
-                            f"Incorrect configuration settings! The config of `pipeline.unet`: {model.base.config} expects"
-                            f" {model.base.config.in_channels} but received `num_channels_latents`: {num_channels_latents} +"
+                            f"Incorrect configuration settings! The config of `pipeline.unet`: {self.model.base.config} expects"
+                            f" {self.model.base.config.in_channels} but received `num_channels_latents`: {num_channels_latents} +"
                             f" `num_channels_mask`: {num_channels_mask} + `num_channels_masked_image`: {num_channels_masked_image}"
                             f" = {num_channels_latents+num_channels_masked_image+num_channels_mask}. Please verify the config of"
                             " `pipeline.unet` or your `mask_image` or `image` input."
                         )
                 elif num_channels_unet != 4:
                     raise ValueError(
-                        f"The unet {model.base.__class__} should have either 4 or 9 input channels, not {model.base.config.in_channels}."
+                        f"The unet {self.model.base.__class__} should have either 4 or 9 input channels, not {self.model.base.config.in_channels}."
                     )
                 
                 # Переопределяем размеры исходя из полученных латентов
@@ -391,7 +386,7 @@ class StableDiffusionUnifiedPipeline():
             timesteps = timesteps[:num_inference_steps]
 
 
-        # Если модель sdxl, то нужно добавить time ids & embeddings
+        # Если модель sdxl, то нужно prepare added time ids & embeddings
         if hasattr(model, "text_encoder_2"):
             add_text_embeds = pooled_prompt_embeds
 
@@ -426,6 +421,7 @@ class StableDiffusionUnifiedPipeline():
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         prompt_embeds = prompt_embeds.to(self.device)
 
+
         # # TODO: Добавить когда-нибудь ip_adapter
         # if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
         #     image_embeds = self.prepare_ip_adapter_image_embeds(
@@ -437,6 +433,7 @@ class StableDiffusionUnifiedPipeline():
         #     )
         #     added_cond_kwargs["image_embeds"] = image_embeds
 
+
         # TODO: Optionally get Guidance Scale Embedding
         # timestep_cond = None
         # if self.unet.config.time_cond_proj_dim is not None:
@@ -444,6 +441,7 @@ class StableDiffusionUnifiedPipeline():
         #     timestep_cond = self.get_guidance_scale_embedding(
         #         guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
         #     ).to(device=device, dtype=latents.dtype)
+
 
         # Denoising loop
         latents = self.denoise_batch(
@@ -456,6 +454,7 @@ class StableDiffusionUnifiedPipeline():
             cross_attention_kwargs=cross_attention_kwargs,
             guidance_scale=guidance_scale,
         )
+
 
         # Опционально возвращаем либо картинку, либо латент
         if self.output_type == "pt":
@@ -666,7 +665,8 @@ class StableDiffusionUnifiedPipeline():
         # if model.text_encoder_2 is not None:
         #     if isinstance(model.lora_loader, StableDiffusionXLLoraLoaderMixin):
         #         unscale_lora_layers(model.text_encoder_2, lora_scale)
-
+        print(prompt_embeds.dtype, negative_prompt_embeds.dtype, pooled_prompt_embeds.dtype, negative_pooled_prompt_embeds.dtype)
+        
         return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
 
  
@@ -811,7 +811,7 @@ class StableDiffusionUnifiedPipeline():
         return latents
 
 
-
+    # TODO: Удостовериться что все работает океечно, уже внутри UI
     def prepare_latents_inpaint(
         self,
         scheduler,
@@ -859,7 +859,7 @@ class StableDiffusionUnifiedPipeline():
             # Если используется чистый шум, масштабируем начальные латенты с учетом начальной сигмы шума
             latents = latents * scheduler.init_noise_sigma if is_strength_max else latents
         elif add_noise:
-            # Если начальные латенты заданы, используем их как шум и масштабируем
+            # Если начальные латенты заданы, а шум добавить надо, то просто масштабируем латенты
             noise = latents.to(self.device)
             latents = noise * scheduler.init_noise_sigma
         else:
@@ -881,7 +881,6 @@ class StableDiffusionUnifiedPipeline():
         return outputs   
     
 
-
     def prepare_mask_latents(
         self, 
         mask, 
@@ -892,6 +891,10 @@ class StableDiffusionUnifiedPipeline():
         dtype, 
         seed=None, 
     ):
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(device=self.device).manual_seed(int(seed))
+
         # resize the mask to latents shape as we concatenate the mask to the latents
         # we do that before converting to dtype to avoid breaking in case we're using cpu_offload
         # and half precision
@@ -941,7 +944,6 @@ class StableDiffusionUnifiedPipeline():
         return mask, masked_image_latents
 
 
-
     def _get_add_time_ids(
         self,
         original_size,
@@ -980,25 +982,63 @@ class StableDiffusionUnifiedPipeline():
         return add_time_ids, add_neg_time_ids
     
 
+    def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
+        dtype = image.dtype
+        if self.model.vae.config.force_upcast:
+            image = image.float()
+            self.model.vae.to(dtype=torch.float32)
+
+        if isinstance(generator, list):
+            image_latents = [
+                retrieve_latents(self.model.vae.encode(image[i : i + 1]), generator=generator[i])
+                for i in range(image.shape[0])
+            ]
+            image_latents = torch.cat(image_latents, dim=0)
+        else:
+            image_latents = retrieve_latents(self.model.vae.encode(image), generator=generator)
+
+        if self.model.vae.config.force_upcast:
+            self.model.vae.to(dtype)
+
+        image_latents = image_latents.to(dtype)
+        image_latents = self.model.vae.config.scaling_factor * image_latents
+
+        return image_latents
+    
 
     def denoise_batch(
         self, 
         latents: torch.FloatTensor,
         timesteps: List[int],
         encoder_hidden_states: torch.FloatTensor,
+        mask: Optional[torch.FloatTensor] = None,
+        image_latents: Optional[torch.FloatTensor] = None,
+        masked_image_latents: Optional[torch.FloatTensor] = None,
+        noise: Optional[torch.FloatTensor] = None,
         denoising_start: Optional[float] = None,
         denoising_end: Optional[float] = None,
         added_cond_kwargs: Optional[Dict[str, Any]] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         guidance_scale: float = 7.5,
+        # ip_adapter_image: Optional[PipelineImageInput] = None,
     ):
-        for t in tqdm(timesteps):
+        # TODO: Переделать данную логику с учетом 9канальной UNet сети для инпеинтинга
+        for i, t in enumerate(timesteps):
             # Удваиваем количество латентов если работаем в режиме do_cfg=True 
             latent_model_input = latents
             if self.do_classifier_free_guidance:
                 latent_model_input = torch.cat([latents] * 2)
             # По сути просто заглушка, которая не делает ничего с latent_model_input для DDPM/DDIM/PNDM 
             latent_model_input = self.model.scheduler.scale_model_input(latent_model_input, t)
+
+            if self.model.base.config.in_channels == 9:
+                latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
+
+            print(latent_model_input.dtype)
+            print(mask.dtype)
+            print(masked_image_latents.dtype)
+            print(encoder_hidden_states.dtype)
+
 
             # Получаем предсказание шума моделью 
             noise_pred = self.model.base(
@@ -1016,23 +1056,25 @@ class StableDiffusionUnifiedPipeline():
 
             # Вычисляем шумный латент с предыдущего шага x_t -> x_t-1
             latents = self.model.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+            
+            # А теперь самое весёлое
+            # Если код в условии на 9 каналов не сработал, то это значит, что предсказание модели было получено при помощи
+            # модели имеющей 4 канала и трюка с максикрованием шума на этапе денойзинга 
+            # + надо не забыть вытащить image_latents
+            if mask is not None and self.model.base.config.in_channels == 4:
+                init_latents_proper = image_latents
+                if self.do_classifier_free_guidance:
+                    init_mask, _ = mask.chunk(2)
+                else:
+                    init_mask = mask
 
+                if i < len(timesteps) - 1:
+                    noise_timestep = timesteps[i + 1]
+                    init_latents_proper = self.model.scheduler.add_noise(
+                        init_latents_proper, noise, torch.tensor([noise_timestep])
+                    )
 
-            # # Inpaint
-            # if num_channels_unet == 4:
-            #     init_latents_proper = image_latents
-            #     if self.do_classifier_free_guidance:
-            #         init_mask, _ = mask.chunk(2)
-            #     else:
-            #         init_mask = mask
-
-            #     if i < len(timesteps) - 1:
-            #         noise_timestep = timesteps[i + 1]
-            #         init_latents_proper = self.scheduler.add_noise(
-            #             init_latents_proper, noise, torch.tensor([noise_timestep])
-            #         )
-
-            #     latents = (1 - init_mask) * init_latents_proper + init_mask * latents
+                latents = (1 - init_mask) * init_latents_proper + init_mask * latents                
 
 
         return latents

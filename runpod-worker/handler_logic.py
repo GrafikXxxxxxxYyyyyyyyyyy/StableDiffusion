@@ -78,6 +78,7 @@ class Handler():
         return response
 
 
+
     def maybe_reload_model(self, model_config):
         # Если указан чекпоинт, то грузит из него
         if "ckpt_path" in list(model_config.keys()):
@@ -99,6 +100,7 @@ class Handler():
         if "scheduler" in list(model_config.keys()):
             scheduler_name = model_config.pop("scheduler")
         self.model.set_scheduler(scheduler_name)
+
 
 
     def inference_mode(self, inference_config) -> dict:

@@ -316,13 +316,15 @@ class App():
         demo.launch()
 
 
+    # TODO: Проверить работоспособность этой логики и что запросы правильно летят 
     def create_and_send_request(self, keys, *args):
+        # 1. Извлекаем переданные параметры обратно
         inference_params = dict(zip(keys, list(args[:len(keys)])))
         lora_count = inference_params["lora_count"]
         task = inference_params["task"]
         prompt_examples_count = inference_params["prompt_examples_count"]
         
-        # Учитываем выбранные лоры
+        # 2. Учитываем выбранные лоры
         lora_names, lora_scales = [], []
         for i in range(lora_count):
             if args[len(keys)+i] != []:
@@ -330,7 +332,7 @@ class App():
                 lora_scales.append(args[len(keys)+i+lora_count])
         loras = dict(zip(lora_names, lora_scales))
             
-        # Соберём конфиг модели
+        # 3. Собираем конфиг модели
         model = {
             "type": inference_params["model_type"],
             "name": inference_params["model_name"],
@@ -339,7 +341,7 @@ class App():
         if loras != {}:
             model["loras"] = loras
 
-        # Соберём конфиг базовых параметров генерации
+        # 4. Соберём конфиг базовых параметров генерации
         params = {
             "num_inference_steps": inference_params["num_inference_steps"],
             "guidance_scale": inference_params["guidance_scale"],
@@ -353,7 +355,7 @@ class App():
         if inference_params["seed"] != -1:
             params["seed"] = inference_params["seed"]
         if task == "Image-To-Image":
-            # Берём саму картинку
+            # Берём картинку c рисуночками -> "composite"
             img = np.ascontiguousarray(inference_params["input_image"]["composite"])
             pil_img = Image.fromarray(img).convert("RGB")
             buffer = io.BytesIO()
