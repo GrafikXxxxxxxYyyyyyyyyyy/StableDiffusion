@@ -211,6 +211,8 @@ class StableDiffusionUnifiedPipeline():
                 latents,
             )
             print(f"Text to image latents: {latents.shape}")
+
+            self.current_task = "Text2Image"
         else:
             ########################################################################################################################################
             # Если картинка есть, а маски нет --> image2image
@@ -245,6 +247,7 @@ class StableDiffusionUnifiedPipeline():
                 height = height * model.vae_scale_factor
                 width = width * model.vae_scale_factor
 
+                self.current_task = "Image2Image"
             ########################################################################################################################################
             # Ну и если есть и картинка и маска --> inpainting
             ########################################################################################################################################
@@ -361,6 +364,9 @@ class StableDiffusionUnifiedPipeline():
                 height, width = latents.shape[-2:]
                 height = height * model.vae_scale_factor
                 width = width * model.vae_scale_factor  
+                print(f"Inpainting latents: {latents.shape, masked_image_latents.shape}")
+
+                self.current_task = "Inpainting"
         ############################################################################################################################################
 
         # 9.1 Apply denoising_end
@@ -1034,12 +1040,6 @@ class StableDiffusionUnifiedPipeline():
             if self.model.base.config.in_channels == 9:
                 latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
 
-            print(latent_model_input.dtype)
-            print(mask.dtype)
-            print(masked_image_latents.dtype)
-            print(encoder_hidden_states.dtype)
-
-
             # Получаем предсказание шума моделью 
             noise_pred = self.model.base(
                 latent_model_input,
@@ -1061,7 +1061,7 @@ class StableDiffusionUnifiedPipeline():
             # Если код в условии на 9 каналов не сработал, то это значит, что предсказание модели было получено при помощи
             # модели имеющей 4 канала и трюка с максикрованием шума на этапе денойзинга 
             # + надо не забыть вытащить image_latents
-            if mask is not None and self.model.base.config.in_channels == 4:
+            if self.current_task == "Inpainting" and self.model.base.config.in_channels == 4:
                 init_latents_proper = image_latents
                 if self.do_classifier_free_guidance:
                     init_mask, _ = mask.chunk(2)

@@ -5,28 +5,30 @@ import base64
 import requests
 import numpy as np
 import gradio as gr
-from PIL import Image
 
+from PIL import Image
+from io import BytesIO
+from dotenv import load_dotenv
+from huggingface_hub import HfApi, HfFileSystem, hf_hub_download
+
+load_dotenv('.venv/.env')
 
 class App():
-    def __init__(self):
-        self.endpoint_id = ""
-        self.available_ckpt = {
-            "sd15": ["Default", "NeverEndingDream", "AnyLoRA"],
-            "sdxl": ["Default", "Juggernaut"], 
-            # "sd3": []
-        }
-        self.available_loras = {
-            "sd15": ['ciri', 'makima'],
-            "sdxl": ['melanie', 'tsunade'], 
-            "sd3": []
-        }
+    def __init__(
+        self, 
+        endpoint_id: str = "ek963qb9sfua7t", 
+        hf_author: str = "GrafikXxxxxxxYyyyyyyyyyy",
+    ):
+        self.endpoint_id = endpoint_id
+
+        self.available_ckpt = self._get_avaliable_checkpoints(hf_author=hf_author)
+        self.available_loras = self._get_avaliable_loras(hf_path=f"{hf_author}/loras")
         self.available_schedulers = ["DDIM", "euler", "euler_a", "DPM++ 2M SDE Karras"]
 
         self.launch()
 
 
-    def launch(self):
+    def launch(self, **kwargs):
         layout_block = gr.Blocks()
         with layout_block as demo:
             with gr.Tab("Inference"):
@@ -313,7 +315,7 @@ class App():
                 gr.Markdown("Когда-нибудь я сделаю UI и для обучения моделей")
                 gr.Markdown("Не то что бы нам очень надо, но просто интересно дать за щёку Kohya_ss")
         
-        demo.launch()
+        demo.launch(**kwargs)
 
 
     # TODO: Проверить работоспособность этой логики и что запросы правильно летят 
@@ -322,7 +324,8 @@ class App():
         inference_params = dict(zip(keys, list(args[:len(keys)])))
         lora_count = inference_params["lora_count"]
         task = inference_params["task"]
-        prompt_examples_count = inference_params["prompt_examples_count"]
+        prompt_examples_count = int(inference_params["prompt_examples_count"])
+        batch_size = int(inference_params["num_images_per_prompt"],)
         
         # 2. Учитываем выбранные лоры
         lora_names, lora_scales = [], []
@@ -348,7 +351,7 @@ class App():
             "cross_attention_kwargs": {"scale": inference_params["cross_attention_kwargs"]},
             "height": inference_params["height"],
             "width": inference_params["width"],
-            "num_images_per_prompt": inference_params["num_images_per_prompt"],
+            "num_images_per_prompt": batch_size,
         }
         if inference_params["clip_skip"] != 0:
             params["clip_skip"] = inference_params["clip_skip"]
@@ -398,8 +401,24 @@ class App():
         }
 
         # Отправляем запрос
-        # response = self.request_to_endpoint({"input": input_request})
-        self.save_last_request({"input": input_request})
+        response = self.request_to_endpoint({"input": input_request})
+        print(response.json())
+        
+        # # Обрабатываем полученные результаты
+        # # TODO: Переделать логику с учётом prompt_examples_count и batch_size
+        # gallery = []
+        # for k in range(prompt_examples_count):
+        #     images = []
+        #     subgallery = response.json()['output']['images'][k * (prompt_examples_count) : (k+1)*prompt_examples_count]
+        #     for base64_string in subgallery:
+        #         img = Image.open(BytesIO(base64.b64decode(base64_string)))
+        #         images.append(img)
+
+        #     gallery.append(images)
+
+        # # gallery = [[images[i], f"{prompt[i]}"] for i in range(len(prompt))]
+        # return gallery
+
 
     
     def request_to_endpoint(self, request):
@@ -415,11 +434,58 @@ class App():
         return response
         
 
-    def save_last_request(self, request):
+    def _save_last_request(self, request):
         with open("test_input.json", 'w') as file:
             json.dump(request, file)
+    
+
+    def _get_avaliable_checkpoints(self, hf_author):
+        available_ckpt = {
+            "sd15": [],
+            "sdxl": [],
+            # "sd3": [],
+        }
+
+        hf_api = HfApi()
+        all_avaliable_models = hf_api.list_models(author=hf_author)
+
+        for model in all_avaliable_models:
+            # Это тот же самый ckpt_path, который юзается в SDModelWrapper
+            ckpt_path = model.id
+
+            if ckpt_path.startswith(f"{hf_author}/sd15_"):
+                available_ckpt["sd15"].append(ckpt_path[len(f"{hf_author}/sd15_"): ])
+            elif ckpt_path.startswith(f"{hf_author}/sdxl_"):
+                available_ckpt["sdxl"].append(ckpt_path[len(f"{hf_author}/sdxl_"): ])
+            elif ckpt_path.startswith(f"{hf_author}/sd3_"):
+                available_ckpt["sd3"].append(ckpt_path[len(f"{hf_author}/sd3_"): ])
 
 
+        return available_ckpt
+
+
+    def _get_avaliable_loras(self, hf_path):
+        avaliable_loras = {
+            "sd15": [],
+            "sdxl": [], 
+            # "sd3": [],
+        }
+
+        fs = HfFileSystem()
+        files = fs.ls(hf_path, detail=False)
+
+        for file in files:
+            if file.endswith(".safetensors"):
+                if file.startswith(f"{hf_path}/sd15_"):
+                    avaliable_loras["sd15"].append(file[len(f"{hf_path}/sd15_"): -len(".safetensors")])
+                elif file.startswith(f"{hf_path}/sdxl_"):
+                    avaliable_loras["sdxl"].append(file[len(f"{hf_path}/sdxl_"): -len(".safetensors")])
+                elif file.startswith(f"{hf_path}/sd3_"):
+                    avaliable_loras["sd3"].append(file[len(f"{hf_path}/sd3_"): -len(".safetensors")]) 
+
+        return avaliable_loras
+
+        
 
 app = App()
 
