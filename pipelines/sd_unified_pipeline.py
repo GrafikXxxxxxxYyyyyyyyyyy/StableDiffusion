@@ -195,6 +195,7 @@ class StableDiffusionUnifiedPipeline():
         ############################################################################################################################################
         # Done!
         latents: torch.Tensor
+        loop_add_kwargs = {}
         if image is None:
             # 4. Создадим стартовые (полностью шумные) латенты
             shape = (
@@ -326,8 +327,10 @@ class StableDiffusionUnifiedPipeline():
 
                 if return_image_latents:
                     latents, noise, image_latents = latents_outputs
+                    loop_add_kwargs["image_latents"] = image_latents
                 else:
                     latents, noise = latents_outputs
+                loop_add_kwargs["noise"] = noise
 
 
                 # 7. Prepare mask latent variables
@@ -340,6 +343,8 @@ class StableDiffusionUnifiedPipeline():
                     prompt_embeds.dtype,
                     seed=None, 
                 )
+                loop_add_kwargs["mask"] = mask
+                loop_add_kwargs["masked_image_latents"] = masked_image_latents
 
 
                 # 8. Check that sizes of mask, masked image and latents match
@@ -450,15 +455,15 @@ class StableDiffusionUnifiedPipeline():
 
 
         # Denoising loop
+        # TODO: добавить все необходимые параметры
         latents = self.denoise_batch(
             latents,
             timesteps,
             prompt_embeds,
-            denoising_start=denoising_start,
-            denoising_end=denoising_end,
             added_cond_kwargs=added_cond_kwargs,
             cross_attention_kwargs=cross_attention_kwargs,
             guidance_scale=guidance_scale,
+            **loop_add_kwargs,
         )
 
 
@@ -904,7 +909,9 @@ class StableDiffusionUnifiedPipeline():
         # resize the mask to latents shape as we concatenate the mask to the latents
         # we do that before converting to dtype to avoid breaking in case we're using cpu_offload
         # and half precision
-        mask = torch.nn.functional.interpolate(mask, size=(height, width))
+        mask = torch.nn.functional.interpolate(
+            mask, size=(height // self.model.vae_scale_factor, width // self.model.vae_scale_factor)
+        )
         mask = mask.to(device=self.device, dtype=dtype)
 
         # duplicate mask and masked_image_latents for each generation per prompt, using mps friendly method
@@ -1021,8 +1028,6 @@ class StableDiffusionUnifiedPipeline():
         image_latents: Optional[torch.FloatTensor] = None,
         masked_image_latents: Optional[torch.FloatTensor] = None,
         noise: Optional[torch.FloatTensor] = None,
-        denoising_start: Optional[float] = None,
-        denoising_end: Optional[float] = None,
         added_cond_kwargs: Optional[Dict[str, Any]] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         guidance_scale: float = 7.5,

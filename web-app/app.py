@@ -16,7 +16,7 @@ load_dotenv('.venv/.env')
 class App():
     def __init__(
         self, 
-        endpoint_id: str = "ek963qb9sfua7t", 
+        endpoint_id: str = "gvgo0fvy4o79m8", 
         hf_author: str = "GrafikXxxxxxxYyyyyyyyyyy",
     ):
         self.endpoint_id = endpoint_id
@@ -305,8 +305,7 @@ class App():
                     GENERATE.click(
                         self.create_and_send_request,
                         inputs=btn_input,
-                        # outputs=outputs,
-                        outputs=[],
+                        outputs=outputs,
                     )
                 ####################################################################################################
                             
@@ -401,23 +400,24 @@ class App():
         }
 
         # Отправляем запрос
+        self._save_last_request({"input": input_request})
         response = self.request_to_endpoint({"input": input_request})
         print(response.json())
         
-        # # Обрабатываем полученные результаты
-        # # TODO: Переделать логику с учётом prompt_examples_count и batch_size
-        # gallery = []
-        # for k in range(prompt_examples_count):
-        #     images = []
-        #     subgallery = response.json()['output']['images'][k * (prompt_examples_count) : (k+1)*prompt_examples_count]
-        #     for base64_string in subgallery:
-        #         img = Image.open(BytesIO(base64.b64decode(base64_string)))
-        #         images.append(img)
+        # Обрабатываем полученные результаты
+        # TODO: Переделать логику с учётом prompt_examples_count и batch_size
+        gallery = []
+        for k in range(prompt_examples_count):
+            images = []
+            subgallery = response.json()['output']['images'][k*batch_size : (k+1)*batch_size]
+            for i, base64_string in enumerate(subgallery):
+                img = Image.open(BytesIO(base64.b64decode(base64_string)))
+                images.append([img, f"{prompt[k]} {i}"])
 
-        #     gallery.append(images)
+            gallery.append(images)
 
-        # # gallery = [[images[i], f"{prompt[i]}"] for i in range(len(prompt))]
-        # return gallery
+        # gallery = [[images[i], f"{prompt[i]}"] for i in range(len(prompt))]
+        return gallery
 
 
     

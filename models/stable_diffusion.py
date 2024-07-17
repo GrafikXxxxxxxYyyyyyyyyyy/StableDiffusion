@@ -249,8 +249,8 @@ class SDModelWrapper():
 
                 self.load_lora_weights(lora_path, adapter_name=lora_name)
 
-        print(f"LoRA adapters has successfully changed to:\n{loras}")
-        self.set_adapters(list(loras.keys()), list(loras.values()))
+            print(f"LoRA adapters has successfully changed to:\n{loras}")
+            self.set_adapters(list(loras.keys()), list(loras.values()))
     
 
     def load_lora_weights(
