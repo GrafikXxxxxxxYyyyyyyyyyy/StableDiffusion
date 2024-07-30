@@ -93,11 +93,7 @@ class StableDiffusionMultitaskPipeline():
         if image.shape[1] == 4:
             init_latents = image
         else:
-            init_latents = vae.encode(
-                image,
-                dtype,
-                generator,
-            )
+            init_latents = vae.encode(image, generator=generator)
 
         # Тупо выравнивает размеры батчей
         if batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] == 0:
@@ -660,7 +656,7 @@ class StableDiffusionMultitaskPipeline():
         # 6. Denoising loop
         from StableDiffusionCore.models.sd_unet import StableDiffusionUNetModel
         ###############################################################################################
-        for i, t in enumerate(timesteps):
+        for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = (
                 torch.cat([latents] * 2)
                 if self.do_cfg else

@@ -343,17 +343,6 @@ class App():
                                         interactive=True,
                                         key="seed",
                                     )
-
-                                    inference_params["width"] = gr.Slider(
-                                        label="Width:",
-                                        minimum=256,
-                                        maximum=2048,
-                                        value=768,
-                                        step=8,
-                                        visible=True,
-                                        interactive=True,
-                                        key="width",
-                                    )
                                     
                                     inference_params["height"] = gr.Slider(
                                         label="Height:",
@@ -364,6 +353,17 @@ class App():
                                         visible=True,
                                         interactive=True,
                                         key="height",
+                                    )
+
+                                    inference_params["width"] = gr.Slider(
+                                        label="Width:",
+                                        minimum=256,
+                                        maximum=2048,
+                                        value=768,
+                                        step=8,
+                                        visible=True,
+                                        interactive=True,
+                                        key="width",
                                     )
 
                                     inference_params["num_images_per_prompt"] = gr.Slider(
