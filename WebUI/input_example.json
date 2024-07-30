@@ -1,0 +1,81 @@
+{
+    "input": {    
+        "model": {
+            "model_path": "GrafikXxxxxxxYyyyyyyyyyy/sdxl_Juggernaut",
+            "type": "sdxl",
+            "name": "Juggernaut",
+            "scheduler": "DPM++ 2M SDE Karras",
+            "loras": {
+                "DetailedEyes": 0.7
+            },
+            "ip_adapter": "ip_adapter_name"
+        },
+
+        "extensions": {            
+            "controlnets": {
+                "openpose": {
+                    "model" : {
+                        "model_type": "pose",
+                        "model_path": ""
+                    },
+                    "pipeline": {
+
+                    },
+                    "openpose_prompt": "",
+                    "openpose_negative_prompt": ""
+                }
+            },
+            
+            "detailers": {
+                "face": {
+                    "model": {
+                        "model_type": "face_detailer",
+                        "model_path": "Bingsu/adetailer",
+                        "confidence": 0.3
+                    },
+                    "pipeline": {
+                        "mask_dilation": 4,
+                        "mask_blur": 4,
+                        "mask_padding": 32,
+                        "strength": 0.4
+                    },
+                    
+                    "face_detailer_positive_prompt": "Nice face",
+                    "face_detailer_prompt": "Detailed face",
+                    "face_detailer_negative_prompt": "Bad face"
+                }
+            }
+        },
+
+        "pipeline": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7,
+            "cross_attention_kwargs": {
+                "scale": 1
+            },
+            "height": 768,
+            "width": 768,
+            "num_images_per_prompt": 1,
+            "clip_skip": 2,
+            "seed": 45436984,
+
+            "refiner": {
+                "type": "Ensemble of experts",
+                "model_path": "stabilityai/stable-diffusion-xl-refiner-1.0",
+                "denoising_end": 0.8
+            }
+        },
+        
+        "target": {
+            "positive_prompt": [
+                "A luck"
+            ],
+            "prompt": [
+                "A girl"
+            ],
+            "negative_prompt": [
+                "A boy"
+            ]
+        }
+    }
+}

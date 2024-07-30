@@ -11,11 +11,13 @@ import io
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from runpod.serverless.utils.rp_validator import validate
 from runpod.serverless.utils import rp_upload, rp_cleanup
-from models.stable_diffusion import SDModelWrapper
-from pipelines.sd_unified_pipeline import StableDiffusionUnifiedPipeline
+
+from StableDiffusionCore.sd_unified_model import StableDiffusionUnifiedModel
+from StableDiffusionCore.sd_unified_pipeline import StableDiffusionUnifiedPipeline
+
 
 
 def convert_pt_to_numpy(images: torch.Tensor) -> List[np.ndarray]:
@@ -23,20 +25,38 @@ def convert_pt_to_numpy(images: torch.Tensor) -> List[np.ndarray]:
     for idx in range(len(images)):
         img = (images[idx] / 2 + 0.5).clamp(0, 1)
         img = (img.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()
-
         np_images.append(img)
 
     return np_images
 
 
+def convert_numpy_to_str (images: List[np.ndarray]) -> List[str]:
+    base64_images = []
+    for img in images:
+        img = np.ascontiguousarray(img)
+        pil_img = Image.fromarray(img)
+        buffer = io.BytesIO()
+        pil_img.save(buffer, format="JPEG")
+        base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        base64_images.append(base64_str)
+
+    return base64_images
+
+
+
 class Handler():
     def __init__(self, device="cuda"): 
         self.device = device
-        self.last_id = '0'
-        self.model: SDModelWrapper = None
+        self.last_id: str = '0'
+        self.model: StableDiffusionUnifiedModel = None
 
 
-    def __call__(self, model: SDModelWrapper, job_input, job_id):
+    def __call__(
+        self, 
+        model: StableDiffusionUnifiedModel, 
+        job_input: dict, 
+        job_id: str,
+    ):
         """
         Принимает на вход модель, с которой нужно работать и 
         запрос от пользователя, который нужно обработать моделью
@@ -55,8 +75,8 @@ class Handler():
         
         # 3. Получает параметры запуска
         request = {}
-        if "params" in list(job_input.keys()):
-            request = job_input.pop('params')
+        if "pipeline" in list(job_input.keys()):
+            request = job_input.pop('pipeline')
 
         # Run!
         response = {}
@@ -64,19 +84,26 @@ class Handler():
             if "prompt" not in list(job_input.keys()):
                 raise ValueError(f"Request must contain 'prompt' field working in '{mode}' mode!")
             
+            # Формируем конечный запрос к серверу
             request = {**job_input, **request}
-            if "seed" not in request:
-                request["seed"] = np.random.randint(0, 1000000000)
-                
+            seed = (
+                request.pop("seed")
+                if "seed" in request else
+                np.random.randint(0, 1000000000)  
+            )
+            request["generator"] = torch.Generator().manual_seed(seed)
+
+            # Получаем ответ от сервера
             response = self.inference_mode(request)
-            response["seed"] = request["seed"]
+            response["seed"] = seed
+
         elif mode == "train":
             pass
+
         else:
             raise ValueError(f"Unknown mode '{mode}")
         
         return response
-
 
 
     def maybe_reload_model(self, model_config):
@@ -102,8 +129,7 @@ class Handler():
         self.model.set_scheduler(scheduler_name)
 
 
-
-    def inference_mode(self, inference_config) -> dict:
+    def inference_mode(self, inference_config: Dict[str, Any]) -> dict:
         """
         inference_config example:
         {
@@ -122,28 +148,30 @@ class Handler():
             seed: Optional[int] = None,
         }
         """
-        # Init inference pipeline
-        pipeline = StableDiffusionUnifiedPipeline(do_cfg=True, device=self.device)
-
         # Обработка изображений если те присутствуют в конфиге
         if "image" in list(inference_config.keys()):
             inference_config["image"] = Image.open(io.BytesIO(base64.b64decode(inference_config["image"])))
         if "mask_image" in list(inference_config.keys()):
             inference_config["mask_image"] = Image.open(io.BytesIO(base64.b64decode(inference_config["mask_image"])))
 
-        images = pipeline(self.model, **inference_config)
-        if isinstance(images, torch.Tensor):
-            images = convert_pt_to_numpy(images)
-        
-        base64_images = []
-        for img in images:
-            img = np.ascontiguousarray(img)
-            pil_img = Image.fromarray(img)
-            buffer = io.BytesIO()
-            pil_img.save(buffer, format="JPEG")
-            base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            base64_images.append(base64_str)
+        # Обработка расширений дефолтного пайплайна
+        extensions = {}
+        if "extensions" in list(inference_config.keys()):
+            extensions = inference_config.pop("extensions")
 
+        # Инициализация и вызов генеративного пайплайна
+        # pipeline = StableDiffusionExtendedPipeline(
+        #     do_cfg=True,
+        #     device=self.device,
+        #     **extensions,
+        # )
+        pipeline = StableDiffusionUnifiedPipeline(
+            do_cfg=True,
+            device=self.device,
+        )
+        images = pipeline(self.model, **inference_config)
+        
+        base64_images = convert_numpy_to_str(convert_pt_to_numpy(images))
         response = {
             "images": base64_images
         }

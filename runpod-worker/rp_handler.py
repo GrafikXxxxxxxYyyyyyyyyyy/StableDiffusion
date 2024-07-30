@@ -6,8 +6,7 @@ import runpod
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from handler_logic import Handler
-from models.stable_diffusion import SDModelWrapper
-from huggingface_hub import HfFileSystem, hf_hub_download
+from StableDiffusionCore.sd_unified_model import StableDiffusionUnifiedModel
 
 torch.cuda.empty_cache()
 
@@ -15,7 +14,7 @@ torch.cuda.empty_cache()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Initialize default model
-MODEL = SDModelWrapper(device=DEVICE, model_type='sdxl', model_name='Juggernaut')
+MODEL = StableDiffusionUnifiedModel(device=DEVICE, model_type='sdxl', model_name='Juggernaut')
 
 # Initialize Handler class
 HANDLER = Handler(device=DEVICE)

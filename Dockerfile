@@ -27,10 +27,11 @@ RUN python3.11 -c "import torch; from diffusers import StableDiffusionXLPipeline
 # Cache LoRAs
 # <HERE>
 
-
 # Cache Models
-COPY ./models /app/models
-COPY ./pipelines /app/pipelines
+COPY ./StableDiffusionCore/models /app/StableDiffusionCore/models
+COPY ./StableDiffusionCore/pipelines /app/StableDiffusionCore/pipelines
+COPY ./StableDiffusionCore/sd_unified_model.py /app/StableDiffusionCore/sd_unified_model.py
+COPY ./StableDiffusionCore/sd_unified_pipeline.py /app/StableDiffusionCore/sd_unified_pipeline.py
 COPY ./runpod-worker /app/runpod-worker
 
 WORKDIR /app

@@ -1,0 +1,7 @@
+{
+    "output": {
+        "images": ["base64.encode"],
+        "prompt": ["textual prompt"],
+        "seed": 0
+    }
+}
