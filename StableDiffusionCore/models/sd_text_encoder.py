@@ -6,7 +6,7 @@ from transformers import (
     CLIPTokenizer,
     CLIPVisionModelWithProjection,
 )
-
+from diffusers.utils.peft_utils import scale_lora_layers, unscale_lora_layers
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
 
@@ -200,11 +200,14 @@ class StableDiffusionTextEncoderModel():
         
         prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
 
+
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         bs_embed, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.to(device=self.device)
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        if self.type == "sdxl":
+            pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt)
+            pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed * num_images_per_prompt, -1)
 
 
         # Retrieve the original scale by scaling back the LoRA layers
@@ -245,7 +248,6 @@ class StableDiffusionTextEncoderModel():
             prompt_3,
             batch_size,
         )
-            
         # 2. Получаем эмбеддинги
         prompt_embeds, pooled_prompt_embeds = self.encode_prompt(
             prompts,
@@ -253,7 +255,6 @@ class StableDiffusionTextEncoderModel():
             num_images_per_prompt,
             lora_scale,
         )
-
         return prompt_embeds, pooled_prompt_embeds
 
 

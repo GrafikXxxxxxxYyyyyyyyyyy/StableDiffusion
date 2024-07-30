@@ -5,10 +5,10 @@
         "name": "Juggernaut",
         "scheduler": "DPM++ 2M SDE Karras",
         "loras": {
-          "DetailedEyes": 0.89
+          "DetailedEyes": 0.86
         }
       },
-
+      
       "pipeline": {
         "num_inference_steps": 30,
         "guidance_scale": 7,
@@ -17,18 +17,17 @@
         },
         "height": 768,
         "width": 768,
-        "num_images_per_prompt": 1,
-        "clip_skip": 2,
-        "seed": 229291267
+        "num_images_per_prompt": 2,
+        "seed": 37053303
       },
 
       "prompt": [
-        "Lol",
-        "Kek"
+        "A boy",
+        "A girl"
       ],
       "negative_prompt": [
-        "kek",
-        "lol"
+        "",
+        ""
       ]
     }
 }

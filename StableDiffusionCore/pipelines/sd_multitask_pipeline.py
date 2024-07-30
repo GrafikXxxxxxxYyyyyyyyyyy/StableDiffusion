@@ -17,13 +17,13 @@ from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 from StableDiffusionCore.sd_unified_model import StableDiffusionUnifiedModel
 
 
-# from diffusers import (
-#     StableDiffusionPipeline,
-#     StableDiffusionXLPipeline, 
-#     StableDiffusionXLImg2ImgPipeline, 
-#     StableDiffusionXLInpaintPipeline,
-#     StableDiffusionUpscalePipeline,
-# )
+from diffusers import (
+    StableDiffusionPipeline,
+    StableDiffusionXLPipeline, 
+    StableDiffusionXLImg2ImgPipeline, 
+    StableDiffusionXLInpaintPipeline,
+    StableDiffusionUpscalePipeline,
+)
 
 
 
@@ -662,7 +662,7 @@ class StableDiffusionMultitaskPipeline():
         ###############################################################################################
         
 
-        
+
         ###############################################################################################
         # 6. Denoising loop
         from StableDiffusionCore.models.sd_unet import StableDiffusionUNetModel

@@ -66,16 +66,14 @@
             }
         },
         
-        "target": {
-            "positive_prompt": [
-                "A luck"
-            ],
-            "prompt": [
-                "A girl"
-            ],
-            "negative_prompt": [
-                "A boy"
-            ]
-        }
+        "positive_prompt": [
+            "A luck"
+        ],
+        "prompt": [
+            "A girl"
+        ],
+        "negative_prompt": [
+            "A boy"
+        ]
     }
 }
