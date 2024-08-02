@@ -41,6 +41,7 @@ class StableDiffusionVAEModel():
 
         self.type = model_type or "sd15"
         self.path = model_path
+        print(f"VAE model has successfully loaded from '{model_path}' checkpoint!")
 
 
     def to(self, device):
@@ -112,3 +113,7 @@ class StableDiffusionVAEModel():
     ) -> torch.Tensor:
 
         pass
+
+
+
+

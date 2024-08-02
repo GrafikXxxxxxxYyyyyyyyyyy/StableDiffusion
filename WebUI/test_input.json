@@ -1,0 +1,31 @@
+{
+    "input": {
+        "model": {
+            "type": "sdxl",
+            "name": "Juggernaut",
+            "scheduler": "euler_a",
+            "loras": {
+                "MoreDetails": 0.64
+            }
+        },
+
+        "pipeline": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7,
+            "cross_attention_kwargs": {
+                "scale": 1
+            },
+            "height": 768,
+            "width": 768,
+            "num_images_per_prompt": 1,
+            "seed": 38511618
+        },
+
+        "prompt": [
+            "An angel girl with beautiful wings in paradise, 4k, ultra detailed, Garden of Eden"
+        ],
+        "negative_prompt": [
+            "bad arms, bad pose, jpeg artifacts, low quality"
+        ]
+    }
+}

@@ -165,13 +165,13 @@ class App():
                                     key="scheduler",
                                 )
 
-                                # if type == "sdxl":
-                                #     inference_params["use_refiner"] = gr.Radio(
-                                #         ["None", "Ensemble of experts", "Two-stage"], 
-                                #         label="For SDXL models you can choose refiner:", 
-                                #         info="Which refiner extended pipeline should be used?",
-                                #         key="use_refiner",
-                                #     )
+                                if type == "sdxl":
+                                    inference_params["refiner"] = gr.Radio(
+                                        ["None", "Ensemble of experts", "Two-stage"], 
+                                        label="For SDXL models you can choose refiner:", 
+                                        info="Which refiner extended pipeline should be used?",
+                                        key="refiner",
+                                    )
 
                             # Все нужные лоры
                             with gr.Row():
@@ -198,92 +198,93 @@ class App():
                                             ))
 
 
-                        # with gr.Accordion(label="Pipeline extensions:", open=True):
-                        #     # Если нужно использовать детайлеры
-                        #     if detailers is not None:
-                        #         for detailer in detailers:
-                        #             if detailer == "FaceDetailer":
-                        #                 inference_params[detailer] = gr.State(value="face_detailer")
-                        #                 with gr.Accordion(label="FaceDetailer", open=False):
-                        #                     model_path = gr.Dropdown(
-                        #                         choices=["Bingsu/adetailer"],
-                        #                         value="Bingsu/adetailer",
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                         label="Model:", 
-                        #                         info="Which face detailer you want to use?",
-                        #                     )
-                        #                     inference_params[f"{detailer}_model_path"] = model_path
+                        with gr.Accordion(label="Pipeline extensions:", open=False):
+                            pass
+                            # # Если нужно использовать детайлеры
+                            # if detailers is not None:
+                            #     for detailer in detailers:
+                            #         if detailer == "FaceDetailer":
+                            #             inference_params[detailer] = gr.State(value="face_detailer")
+                            #             with gr.Accordion(label="FaceDetailer", open=False):
+                            #                 model_path = gr.Dropdown(
+                            #                     choices=["Bingsu/adetailer"],
+                            #                     value="Bingsu/adetailer",
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                     label="Model:", 
+                            #                     info="Which face detailer you want to use?",
+                            #                 )
+                            #                 inference_params[f"{detailer}_model_path"] = model_path
 
-                        #                     confidence = gr.Slider(
-                        #                         label="Confidence",
-                        #                         minimum=0,
-                        #                         maximum=1.0,
-                        #                         value=0.3,
-                        #                         step=0.01,
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                     )
-                        #                     inference_params[f"{detailer}_confidence"] = confidence
+                            #                 confidence = gr.Slider(
+                            #                     label="Confidence",
+                            #                     minimum=0,
+                            #                     maximum=1.0,
+                            #                     value=0.3,
+                            #                     step=0.01,
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                 )
+                            #                 inference_params[f"{detailer}_confidence"] = confidence
 
-                        #                     mask_dilation = gr.Slider(
-                        #                         label="Mask delation",
-                        #                         minimum=0,
-                        #                         maximum=12,
-                        #                         value=4,
-                        #                         step=1,
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                     )
-                        #                     inference_params[f"{detailer}_mask_dilation"] = mask_dilation
+                            #                 mask_dilation = gr.Slider(
+                            #                     label="Mask delation",
+                            #                     minimum=0,
+                            #                     maximum=12,
+                            #                     value=4,
+                            #                     step=1,
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                 )
+                            #                 inference_params[f"{detailer}_mask_dilation"] = mask_dilation
 
-                        #                     mask_blur = gr.Slider(
-                        #                         label="Mask blur",
-                        #                         minimum=0,
-                        #                         maximum=12,
-                        #                         value=4,
-                        #                         step=1,
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                     )
-                        #                     inference_params[f"{detailer}_mask_blur"] = mask_blur
+                            #                 mask_blur = gr.Slider(
+                            #                     label="Mask blur",
+                            #                     minimum=0,
+                            #                     maximum=12,
+                            #                     value=4,
+                            #                     step=1,
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                 )
+                            #                 inference_params[f"{detailer}_mask_blur"] = mask_blur
 
-                        #                     mask_padding = gr.Slider(
-                        #                         label="Mask padding",
-                        #                         minimum=0,
-                        #                         maximum=64,
-                        #                         value=32,
-                        #                         step=1,
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                     )
-                        #                     inference_params[f"{detailer}_mask_padding"] = mask_padding
+                            #                 mask_padding = gr.Slider(
+                            #                     label="Mask padding",
+                            #                     minimum=0,
+                            #                     maximum=64,
+                            #                     value=32,
+                            #                     step=1,
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                 )
+                            #                 inference_params[f"{detailer}_mask_padding"] = mask_padding
 
-                        #                     strength = gr.Slider(
-                        #                         label="Inpaint strength",
-                        #                         minimum=0,
-                        #                         maximum=1.0,
-                        #                         value=0.4,
-                        #                         step=0.01,
-                        #                         visible=True,
-                        #                         interactive=True,
-                        #                     )
-                        #                     inference_params[f"{detailer}_strength"] = strength
+                            #                 strength = gr.Slider(
+                            #                     label="Inpaint strength",
+                            #                     minimum=0,
+                            #                     maximum=1.0,
+                            #                     value=0.4,
+                            #                     step=0.01,
+                            #                     visible=True,
+                            #                     interactive=True,
+                            #                 )
+                            #                 inference_params[f"{detailer}_strength"] = strength
 
-                        #                     face_detailer_prompt = gr.Textbox(
-                        #                         label=f"Detailer prompt:",
-                        #                     )
-                        #                     inference_params[f"{detailer}_prompt"] = face_detailer_prompt
+                            #                 face_detailer_prompt = gr.Textbox(
+                            #                     label=f"Detailer prompt:",
+                            #                 )
+                            #                 inference_params[f"{detailer}_prompt"] = face_detailer_prompt
                                             
-                        #                     face_detaile_negative_prompt = gr.Textbox(
-                        #                         label=f"Detailer negative prompt:",
-                        #                     )
-                        #                     inference_params[f"{detailer}_negative_prompt"] = face_detaile_negative_prompt
-                        #             elif detailer == "ArmDetailer":
-                        #                 inference_params[detailer] = "arm_detailer"
-                        #                 with gr.Accordion(label="ArmDetailer", open=False):
+                            #                 face_detaile_negative_prompt = gr.Textbox(
+                            #                     label=f"Detailer negative prompt:",
+                            #                 )
+                            #                 inference_params[f"{detailer}_negative_prompt"] = face_detaile_negative_prompt
+                            #         elif detailer == "ArmDetailer":
+                            #             inference_params[detailer] = "arm_detailer"
+                            #             with gr.Accordion(label="ArmDetailer", open=False):
 
-                        #                     pass
+                            #                 pass
 
 
                         with gr.Accordion(label="Pipeline:", open=True):
@@ -377,7 +378,10 @@ class App():
                                         key="num_images_per_prompt",
                                     )
 
-                                    if task is not None and task != "Text-To-Image":
+                                    if (
+                                        task is not None
+                                        and task != "Text-To-Image"
+                                    ):
                                         inference_params["strength"] = gr.Slider(
                                             label="Strength:",
                                             minimum=0,
@@ -388,20 +392,56 @@ class App():
                                             interactive=True,
                                             key="strength",
                                         )
-                                
-                                if task is not None and task != "Text-To-Image":
-                                    with gr.Accordion(label="Input image:", open=True):
-                                        inference_params["input_image"] = gr.ImageEditor(
-                                            sources=('upload'), 
-                                            layers=False,
-                                            brush=(
-                                                gr.Brush(colors=["#FFFFFF"], color_mode="fixed")
-                                                if task == "Inpainting" else
-                                                None
-                                            ),
-                                            type='numpy',
-                                            key="input_image",
+
+                                    if type == "sdxl":
+                                        inference_params["denoising_end"] = gr.Slider(
+                                            label="Denoising end:",
+                                            info="This paramets applies only with 'Ensemble of experts' refiner mode",
+                                            minimum=0,
+                                            maximum=1.0,
+                                            value=0.8,
+                                            step=0.01,
+                                            visible=True,
+                                            interactive=True,
+                                            key="denoising_end",
                                         )
+
+                                        inference_params["refiner_inference_steps"] = gr.Slider(
+                                            label="Choose number of refiner inference steps:",
+                                            info="This paramets applies only with 'Two-stage' refiner mode",
+                                            minimum=0,
+                                            maximum=100,
+                                            value=20,
+                                            step=1,
+                                            visible=True,
+                                            interactive=True,
+                                            key="refiner_inference_steps",
+                                        )
+                                
+                                if (
+                                    task is not None 
+                                    and task != "Text-To-Image"
+                                ):
+                                    with gr.Row():
+                                        with gr.Group():
+                                            inference_params["input_image"] = gr.ImageEditor(
+                                                sources=('upload'), 
+                                                layers=False,
+                                                brush=(
+                                                    gr.Brush(colors=["#FFFFFF"], color_mode="fixed")
+                                                    if task == "Inpainting" else
+                                                    None
+                                                ),
+                                                type='numpy',
+                                                key="input_image",
+                                            )
+                                            
+                                            inference_params["image_size_source"] = gr.Radio(
+                                                ["Original", "Custom"], 
+                                                label="Which source of image size you want to use?", 
+                                                value="original image size",
+                                                key="image_size_source",
+                                            )
 
 
                     # Задание промптов
@@ -552,6 +592,12 @@ class App():
             "width": inference_params["width"],
             "num_images_per_prompt": batch_size,
         }
+        if (
+            "refiner" in inference_params 
+            and inference_params["refiner"] != "None"
+        ):
+            params["refiner"] = inference_params["refiner"]
+            params["refiner_scale"] = inference_params["refiner_scale"]
         if inference_params["clip_skip"] != 0:
             params["clip_skip"] = inference_params["clip_skip"]
         if inference_params["seed"] != -1:
@@ -609,7 +655,6 @@ class App():
         
 
         # 8. Обрабатываем полученные результаты
-        # TODO: Переделать логику с учётом prompt_examples_count и batch_size
         gallerys = {}
         for k in range(prompt_examples_count):
             images = []
@@ -620,7 +665,12 @@ class App():
 
             gallerys[prompt[k]] = images
 
-        return list(gallerys.values())
+        # TODO: Отладить ошибку связанную с множественной отрисовкой в режимах img2img и inpainting
+        return (
+            [gallerys.values()]
+            if prompt_examples_count > 1 else
+            gallerys[prompt[0]]
+        )
 
 
     def request_to_endpoint(self, request):

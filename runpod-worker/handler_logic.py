@@ -154,21 +154,20 @@ class Handler():
         if "mask_image" in list(inference_config.keys()):
             inference_config["mask_image"] = Image.open(io.BytesIO(base64.b64decode(inference_config["mask_image"])))
 
-        # Обработка расширений дефолтного пайплайна
-        extensions = {}
-        if "extensions" in list(inference_config.keys()):
-            extensions = inference_config.pop("extensions")
-
+        # # Обработка расширений дефолтного пайплайна
+        # # TODO: Переделать логику сбора экстеншенов
+        # extensions = {}
+        # if "extensions" in list(inference_config.keys()):
+        #     extensions = inference_config.pop("extensions")
+        extensions = inference_config.get("extensions", {})
+    
         # Инициализация и вызов генеративного пайплайна
-        # pipeline = StableDiffusionExtendedPipeline(
-        #     do_cfg=True,
-        #     device=self.device,
-        #     **extensions,
-        # )
-        pipeline = StableDiffusionUnifiedPipeline(
+        pipeline = StableDiffusionExtendedPipeline(
             do_cfg=True,
             device=self.device,
+            **extensions,
         )
+    
         images = pipeline(self.model, **inference_config)
         
         base64_images = convert_numpy_to_str(convert_pt_to_numpy(images))

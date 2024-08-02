@@ -52,13 +52,17 @@ class StableDiffusionUnifiedModel():
 
         # Инициализируем необходимые компоненты модели
         self.vae = StableDiffusionVAEModel(model_path, model_type, device)
-        self._unet = StableDiffusionUNetModel(model_path, model_type, device)
+        self.base = StableDiffusionUNetModel(model_path, model_type, device)
         self.text_encoder = StableDiffusionTextEncoderModel(model_path, model_type, device)
         self.scheduler = StableDiffusionSchedulerModel(model_path, scheduler_name)
-        # Если SDXL то добавляется ещё и Refiner
-        if model_type == "sdxl":
-            self.refiner = StableDiffusionUNetModel("stabilityai/stable-diffusion-xl-refiner-1.0", model_type, device)
-        else:
+        if model_type == "sdxl": # Если SDXL то добавляется ещё и Refiner
+            print(f"Loading refiner...")
+            self.refiner = StableDiffusionUNetModel(
+                model_path="stabilityai/stable-diffusion-xl-refiner-1.0", 
+                model_type="sdxl", 
+                device=device
+            )
+        else: # в противном случае наоборот удаляется
             if hasattr(self, "refiner"):
                 delattr(self, "refiner")
 
@@ -111,7 +115,7 @@ class StableDiffusionUnifiedModel():
         return (
             self.refiner 
             if self.use_refiner and self.type == "sdxl" else
-            self._unet
+            self.base
         )
         
 

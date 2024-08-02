@@ -74,6 +74,7 @@ class StableDiffusionTextEncoderModel():
         else:
             raise ValueError(f"Unknown model type '{model_type}'")
         self.to(device)
+        print(f"TextEncoder model has successfully loaded from '{model_path}' checkpoint!")
 
 
     def to(self, device):

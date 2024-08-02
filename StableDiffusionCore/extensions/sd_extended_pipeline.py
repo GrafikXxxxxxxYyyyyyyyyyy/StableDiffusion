@@ -22,10 +22,10 @@ from StableDiffusionCore.extensions.pipelines.detailer_pipeline import StableDif
 class StableDiffusionExtendedPipeline():
     def __init__(
         self, 
-        controlnets: Optional[List[dict]] = None,
-        detailers: Optional[List[dict]] = None,
         do_cfg: bool = True,
         device: Optional[str] = None,
+        controlnets: Optional[List[dict]] = None,
+        detailers: Optional[List[dict]] = None,
     ):  
         self.device = torch.device("cpu")
         if device:

@@ -27,6 +27,7 @@ class StableDiffusionUNetModel():
             use_safetensors=True
         )
         self.to(device)
+        print(f"UNet model has successfully loaded from '{model_path}' checkpoint!")
 
 
     def to(self, device):

@@ -39,218 +39,8 @@ class StableDiffusionMultitaskPipeline():
 
         self.device = torch.device("cpu")
         if device:
-            self.device = torch.device(device)
-
-
-    def prepare_text_to_image_latents(self, 
-        batch_size, 
-        num_channels_latents, 
-        height, 
-        width, 
-        dtype, 
-        generator, 
-        latents=None
-    ):
-        shape = (
-            batch_size, 
-            num_channels_latents, 
-            height, 
-            width
-        )
-
-        if latents is None:
-            latents = randn_tensor(
-                shape, 
-                generator=generator, 
-                device=self.device, 
-                dtype=dtype
-            )
-        else:
-            latents = latents.to(self.device)
-
-        return latents
-
-
-    def prepare_image_to_image_latents(
-        self, 
-        vae,
-        scheduler,
-        image, 
-        timestep, 
-        batch_size, 
-        dtype, 
-        generator=None, 
-        add_noise=True
-    ):  
-        if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
-            raise ValueError(
-                f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
-            )
-
-        image = image.to(device=self.device, dtype=dtype)
-
-        # Если изображение уже в формате латентов (имеет 4 канала), то оно используется как начальные латенты.
-        if image.shape[1] == 4:
-            init_latents = image
-        else:
-            init_latents = vae.encode(image, generator=generator)
-
-        # Тупо выравнивает размеры батчей
-        if batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] == 0:
-            # expand init_latents for batch_size
-            additional_image_per_prompt = batch_size // init_latents.shape[0]
-            init_latents = torch.cat([init_latents] * additional_image_per_prompt, dim=0)
-        elif batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] != 0:
-            raise ValueError(
-                f"Cannot duplicate `image` of batch size {init_latents.shape[0]} to {batch_size} text prompts."
-            )
-        else:
-            init_latents = torch.cat([init_latents], dim=0)
-
-
-        if add_noise:
-            shape = init_latents.shape
-            noise = randn_tensor(
-                shape, 
-                generator=generator, 
-                device=self.device, 
-                dtype=dtype
-            )
-            # get latents
-            init_latents = scheduler.add_noise(init_latents, noise, timestep)
-
-        latents = init_latents
-
-        return latents
+            self.device = torch.device(device) 
         
-
-    def prepare_inpaint_latents(
-        self,
-        vae, 
-        scheduler,
-        batch_size,
-        num_channels_latents,
-        height,
-        width,
-        dtype,
-        generator,
-        latents=None,
-        image=None,
-        timestep=None,
-        is_strength_max=True,
-        add_noise=True,
-        return_noise=False,
-        return_image_latents=False,
-    ):
-        shape = (
-            batch_size, 
-            num_channels_latents, 
-            height, 
-            width
-        )
-        if (image is None or timestep is None) and not is_strength_max:
-            raise ValueError(
-                "Since strength < 1. initial latents are to be initialised as a combination of Image + Noise."
-                "However, either the image or the noise timestep has not been provided."
-            )
-
-        # Если изображение уже имеет форму латентов, просто повторяем его для batch_size
-        if image.shape[1] == 4:
-            image_latents = image.to(device=self.device, dtype=dtype)
-            image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
-        elif return_image_latents or (latents is None and not is_strength_max):
-            image = image.to(device=self.device, dtype=dtype)
-            # Кодируем изображение в латентное пространство с использованием VAE
-            image_latents = vae.encode(image, generator)
-            image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
-
-        # Если начальные латенты не заданы и требуется добавить шум
-        if latents is None and add_noise:
-            # Генерация шума
-            noise = randn_tensor(shape, generator=generator, device=self.device, dtype=dtype)
-            # Если сила максимальная, используем шум как начальные латенты, иначе комбинируем изображение и шум
-            latents = noise if is_strength_max else scheduler.add_noise(image_latents, noise, timestep)
-            # Если используется чистый шум, масштабируем начальные латенты с учетом начальной сигмы шума
-            latents = latents * scheduler.init_noise_sigma if is_strength_max else latents
-        elif add_noise:
-            # Если начальные латенты заданы, а шум добавить надо, то просто масштабируем латенты
-            noise = latents.to(self.device)
-            latents = noise * scheduler.init_noise_sigma
-        else:
-            # Если шум не нужно добавлять, просто генерируем новый шум
-            noise = randn_tensor(shape, generator=generator, device=self.device, dtype=dtype)
-            latents = image_latents.to(self.device)
-
-        outputs = (latents,)
-        if return_noise:
-            outputs += (noise,)
-        if return_image_latents:
-            outputs += (image_latents,)
-
-        return outputs   
-        
-        
-    def prepare_mask_latents(
-        self, 
-        vae,
-        mask, 
-        masked_image, 
-        batch_size, 
-        height, 
-        width, 
-        dtype, 
-        generator,
-    ):
-        # resize the mask to latents shape as we concatenate the mask to the latents
-        # we do that before converting to dtype to avoid breaking in case we're using cpu_offload
-        # and half precision
-        mask = torch.nn.functional.interpolate(
-            mask, size=(height, width)
-        )
-        mask = mask.to(device=self.device, dtype=dtype)
-
-        # duplicate mask and masked_image_latents for each generation per prompt, using mps friendly method
-        if mask.shape[0] < batch_size:
-            if not batch_size % mask.shape[0] == 0:
-                raise ValueError(
-                    "The passed mask and the required batch size don't match. Masks are supposed to be duplicated to"
-                    f" a total batch size of {batch_size}, but {mask.shape[0]} masks were passed. Make sure the number"
-                    " of masks that you pass is divisible by the total requested batch size."
-                )
-            mask = mask.repeat(batch_size // mask.shape[0], 1, 1, 1)
-
-        mask = torch.cat([mask] * 2) if self.do_cfg else mask
-
-        if masked_image is not None and masked_image.shape[1] == 4:
-            masked_image_latents = masked_image
-        else:
-            masked_image_latents = None
-
-        if masked_image is not None:
-            if masked_image_latents is None:
-                masked_image = masked_image.to(device=self.device, dtype=dtype)
-                masked_image_latents = vae.encode(masked_image, generator)
-
-            if masked_image_latents.shape[0] < batch_size:
-                if not batch_size % masked_image_latents.shape[0] == 0:
-                    raise ValueError(
-                        "The passed images and the required batch size don't match. Images are supposed to be duplicated"
-                        f" to a total batch size of {batch_size}, but {masked_image_latents.shape[0]} images were passed."
-                        " Make sure the number of images that you pass is divisible by the total requested batch size."
-                    )
-                masked_image_latents = masked_image_latents.repeat(
-                    batch_size // masked_image_latents.shape[0], 1, 1, 1
-                )
-
-            masked_image_latents = (
-                torch.cat([masked_image_latents] * 2) if self.do_cfg else masked_image_latents
-            )
-
-            # aligning device to prevent device errors when concating it with the latent model input
-            masked_image_latents = masked_image_latents.to(device=self.device, dtype=dtype)
-
-        return mask, masked_image_latents
-    
 
     def _get_add_time_ids(
         self,
@@ -362,9 +152,8 @@ class StableDiffusionMultitaskPipeline():
     @torch.no_grad()
     def __call__(
         self,
-        model: Optional[StableDiffusionUnifiedModel],
-        # Refiner
-        use_refiner: Optional[bool] = False,
+        model: StableDiffusionUnifiedModel,
+
         # text2image
         prompt: Optional[Union[str, List[str]]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
@@ -379,32 +168,28 @@ class StableDiffusionMultitaskPipeline():
         width: Optional[int] = None,
         num_images_per_prompt: Optional[int] = 1,
         num_inference_steps: int = 30,
-        denoising_end: Optional[float] = None,
-        denoising_start: Optional[float] = None,
         guidance_scale: float = 5.0,
-        latents: Optional[torch.FloatTensor] = None,
-        # ip_adapter_image: Optional[PipelineImageInput] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         clip_skip: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         output_type: str = "pt",
+        
         # image2image
         image: PipelineImageInput = None,
         strength: float = 1.0,
+
         # inpaint
         mask_image: PipelineImageInput = None,
+
+        # Refiner
+        denoising_end: Optional[float] = None,
+        denoising_start: Optional[float] = None,
+        refiner_latents: Optional[torch.FloatTensor] = None,
+            # ip_adapter_image: Optional[PipelineImageInput] = None,
     ):  
         ###############################################################################################
         # 1. Prepare constants
         ###############################################################################################
-        # Всегда переводим на обычную модель и опционально на рефайнер
-        model.switch_denoising_model("base")
-        if use_refiner:
-            model.switch_denoising_model("refiner")
-
-        height = height or model.unet.config.sample_size * model.vae.scale_factor
-        width = width or model.unet.config.sample_size * model.vae.scale_factor
-
         batch_size: int
         prompt = prompt or ""
         if isinstance(prompt, str):
@@ -412,11 +197,9 @@ class StableDiffusionMultitaskPipeline():
         elif isinstance(prompt, list):
             batch_size = len(prompt)
 
-        # dtype = 
         is_strength_max = strength == 1.0
         num_channels_latents = model.vae.config.latent_channels
         num_channels_unet = model.unet.config.in_channels
-        return_image_latents = num_channels_unet == 4
         ###############################################################################################
 
 
@@ -425,6 +208,7 @@ class StableDiffusionMultitaskPipeline():
         # 2. Encode input prompt
         from StableDiffusionCore.models.sd_text_encoder import StableDiffusionTextEncoderModel
         ###############################################################################################
+        # TODO: Добавить в аргументы опциональные готовые эмбеддинги
         prompt_embeds, pooled_prompt_embeds = model.text_encoder(
             prompt,
             prompt_2,
@@ -479,175 +263,163 @@ class StableDiffusionMultitaskPipeline():
         # 4. Prepare latents for the corresponding task
         from StableDiffusionCore.models.sd_vae import StableDiffusionVAEModel
         ###############################################################################################
+        task: str
+        latents: torch.Tensor
         if image is None and mask_image is None: # txt2img
-            self.task = "txt2img"
+            task = "txt2img"
 
-            latents = self.prepare_text_to_image_latents(
-                batch_size * num_images_per_prompt,
-                num_channels_latents,
-                height // model.vae.scale_factor, 
-                width // model.vae.scale_factor,
-                prompt_embeds.dtype,
-                generator,
-                latents,
+            height = height or model.unet.config.sample_size * model.vae.scale_factor
+            width = width or model.unet.config.sample_size * model.vae.scale_factor
+
+            # prepare noisy latents
+            latents = randn_tensor(
+                shape=(
+                    batch_size * num_images_per_prompt,
+                    num_channels_latents, 
+                    height // model.vae.scale_factor,
+                    width // model.vae.scale_factor,
+                ), 
+                generator=generator, 
+                device=self.device, 
+                dtype=prompt_embeds.dtype,
             )
             # scale the initial noise by the standard deviation required by the scheduler
             latents = latents * model.scheduler.init_noise_sigma
-
         elif mask_image is None: # img2img
-            self.task = "img2img"
+            task = "img2img"
 
-            # preprocess image
+            # process and encode image
             image = model.image_processor.preprocess(image)
-
-            add_noise = True if denoising_start is None else False
-            latents = self.prepare_image_to_image_latents(
-                model.vae,
-                model.scheduler,
-                image,
-                latent_timestep,
-                batch_size * num_images_per_prompt,
-                prompt_embeds.dtype,
-                generator,
-                add_noise,
-            )
-
-            # Переопределяем размеры исходя из полученных латентов
-            height, width = latents.shape[-2:]
-            height = height * model.vae.scale_factor
-            width = width * model.vae.scale_factor
-        else: # inpaint
-            self.task = "inpaint"
-
-            # preprocess image
-            init_image = model.image_processor.preprocess(
-                image, 
-                height=height, 
-                width=width,
-            ).to(dtype=torch.float32)
-
-            # preprocess mask
-            mask = model.mask_processor.preprocess(
-                mask_image, 
-                height=height, 
-                width=width,
-            )
-            
-            # create masked image
-            masked_image = (
-                None
-                if init_image.shape[1] == 4 else
-                init_image * (mask < 0.5)
-            )
-            
-            latents_outputs = self.prepare_inpaint_latents(
-                model.vae,
-                model.scheduler,
-                batch_size * num_images_per_prompt,
-                num_channels_latents,
-                height // model.vae.scale_factor, 
-                width // model.vae.scale_factor,
-                prompt_embeds.dtype,
-                generator,
-                latents,
-                image=init_image,
-                timestep=latent_timestep,
-                is_strength_max=is_strength_max,
-                add_noise=False if denoising_start else True,
-                return_noise=True,
-                return_image_latents=return_image_latents,
-            )
-
-            if return_image_latents:
-                latents, noise, image_latents = latents_outputs
-            else:
-                latents, noise = latents_outputs
-        
-            mask, masked_image_latents = self.prepare_mask_latents(
-                model.vae,
-                mask,
-                masked_image,
-                batch_size * num_images_per_prompt,
-                height // model.vae.scale_factor, 
-                width // model.vae.scale_factor,
-                prompt_embeds.dtype,
-                generator,
-            )
-
-            # check that sizes of mask, masked image and latents match
-            if num_channels_unet == 9:
-                num_channels_mask = mask.shape[1]
-                num_channels_masked_image = masked_image_latents.shape[1]
-                if num_channels_latents + num_channels_mask + num_channels_masked_image != model.unet.num_channels_unet:
-                    raise ValueError(
-                        f"Incorrect configuration settings! The config of `pipeline.unet`: {model.unet.config} expects"
-                        f" {model.unet.num_channels_unet} but received `num_channels_latents`: {num_channels_latents} +"
-                        f" `num_channels_mask`: {num_channels_mask} + `num_channels_masked_image`: {num_channels_masked_image}"
-                        f" = {num_channels_latents+num_channels_masked_image+num_channels_mask}. Please verify the config of"
-                        " `pipeline.unet` or your `mask_image` or `image` input."
-                    )
-            elif num_channels_unet != 4:
-                raise ValueError(
-                    f"The unet {model.unet.unet.__class__} should have either 4 or 9 input channels, not {model.unet.num_channels_unet}."
+            if height and width:
+                image = torch.nn.functional.interpolate(
+                    image, size=(height, width)
                 )
+            image = image.to(device=self.device, dtype=prompt_embeds.dtype)
+            image_latents = model.vae.encode(image, generator=generator)
 
-            # Переопределяем размеры исходя из полученных латентов
-            height, width = latents.shape[-2:]
-            height = height * model.vae.scale_factor
-            width = width * model.vae.scale_factor  
+            # add noise to latents
+            noise = randn_tensor(
+                shape=image_latents.shape, 
+                generator=generator, 
+                device=self.device, 
+                dtype=prompt_embeds.dtype,
+            )
+            latents = model.scheduler.add_noise(image_latents, noise, latent_timestep)
+        else: # inpaint
+            task = "inpaint"
+
+            # process mask and image
+            initial_image = model.image_processor.preprocess(image)
+            mask = model.mask_processor.preprocess(mask_image)
+            if height and width:
+                initial_image = torch.nn.functional.interpolate(
+                    initial_image, size=(height, width)
+                )
+                mask = torch.nn.functional.interpolate(
+                    mask, size=(height, width)
+                )
+            # masking the original image
+            masked_image = initial_image * (mask < 0.5)
+
+            # encode image
+            initial_image = initial_image.to(device=self.device, dtype=prompt_embeds.dtype)
+            image_latents = model.vae.encode(initial_image, generator)
+            image_latents = image_latents.repeat(
+                (batch_size * num_images_per_prompt) // image_latents.shape[0], 1, 1, 1
+            )
+            # encode masked image
+            masked_image = masked_image.to(device=self.device, dtype=prompt_embeds.dtype)
+            masked_image_latents = model.vae.encode(masked_image, generator)
+            masked_image_latents = masked_image_latents.repeat(
+                (batch_size * num_images_per_prompt) // masked_image_latents.shape[0], 1, 1, 1
+            )
+            # resize the mask to latents shape as we concatenate the mask to the latents
+            mask = torch.nn.functional.interpolate(
+                mask, size=(height // model.vae.scale_factor, width // model.vae.scale_factor)
+            )
+            mask = mask.repeat(
+                (batch_size * num_images_per_prompt) // mask.shape[0], 1, 1, 1
+            )
+
+            # add noise to latents
+            noise = randn_tensor(
+                shape=image_latents.shape, 
+                generator=generator, 
+                device=self.device, 
+                dtype=prompt_embeds.dtype
+            )
+            if is_strength_max:
+                latents = noise * model.scheduler.init_noise_sigma
+            else:
+                latents = model.scheduler.add_noise(image_latents, noise, latent_timestep)
+            
+            # Применяем CFG
+            if self.do_cfg:
+                mask = torch.cat([mask] * 2)
+                masked_image_latents = torch.cat([masked_image_latents] * 2) 
+
+            # aligning device to prevent device errors when concating it with the latent model input
+            image_latents = image_latents.to(device=self.device, dtype=prompt_embeds.dtype)
+            mask = mask.to(device=self.device, dtype=prompt_embeds.dtype)
+            masked_image_latents = masked_image_latents.to(device=self.device, dtype=prompt_embeds.dtype)
         ###############################################################################################
+        # Если на вход пришли латенты с предыдущей стадии рефайнера, то просто используем их
+        if refiner_latents:
+            latents = refiner_latents
 
 
 
         ###############################################################################################
         # TODO: 5. Prepare additional arguments
         ###############################################################################################
-        added_cond_kwargs = None
-        if model.type == "sdxl":
-            # time ids
-            add_time_ids, add_neg_time_ids = self._get_add_time_ids(
-                original_size=(height, width),
-                crops_coords_top_left=(0, 0),
-                target_size=(height, width),
-                negative_original_size=(height, width),
-                negative_crops_coords_top_left=(0, 0),
-                negative_target_size=(height, width),
-                addition_time_embed_dim=model.unet.config.addition_time_embed_dim,
-                expected_add_embed_dim=model.unet.add_embed_dim,
-                dtype=prompt_embeds.dtype,
-                text_encoder_projection_dim=model.text_encoder.text_encoder_projection_dim,
-            )
-            add_time_ids = add_time_ids.repeat(batch_size * num_images_per_prompt, 1)
-            add_neg_time_ids = add_neg_time_ids.repeat(batch_size * num_images_per_prompt, 1)
+        if "Prepare additional components":
+            added_cond_kwargs = None
+            
+            # # TODO: IP_adapter
+            # if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
+            #     image_embeds = self.prepare_ip_adapter_image_embeds(
+            #         ip_adapter_image,
+            #         ip_adapter_image_embeds,
+            #         device,
+            #         batch_size * num_images_per_prompt,
+            #         self.do_classifier_free_guidance,
+            #     )
+            #     added_cond_kwargs["image_embeds"] = image_embeds
+            
+            if model.type == "sdxl":
+                # time ids
+                add_time_ids, add_neg_time_ids = self._get_add_time_ids(
+                    original_size=(height, width),
+                    crops_coords_top_left=(0, 0),
+                    target_size=(height, width),
+                    negative_original_size=(height, width),
+                    negative_crops_coords_top_left=(0, 0),
+                    negative_target_size=(height, width),
+                    addition_time_embed_dim=model.unet.config.addition_time_embed_dim,
+                    expected_add_embed_dim=model.unet.add_embed_dim,
+                    dtype=prompt_embeds.dtype,
+                    text_encoder_projection_dim=model.text_encoder.text_encoder_projection_dim,
+                )
+                add_time_ids = add_time_ids.repeat(batch_size * num_images_per_prompt, 1)
+                add_neg_time_ids = add_neg_time_ids.repeat(batch_size * num_images_per_prompt, 1)
 
-            if self.do_cfg:
-                add_time_ids = torch.cat([add_neg_time_ids, add_time_ids], dim=0)
+                if self.do_cfg:
+                    add_time_ids = torch.cat([add_neg_time_ids, add_time_ids], dim=0)
 
-            added_cond_kwargs = {
-                "text_embeds": add_text_embeds.to(self.device), 
-                "time_ids": add_time_ids.to(self.device)
-            }
-        elif model.type == "sd3":
-            raise ValueError(f"Model  type '{model.type}' cannot be used!")
-        
-        # # TODO: IP_adapter
-        # if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-        #     image_embeds = self.prepare_ip_adapter_image_embeds(
-        #         ip_adapter_image,
-        #         ip_adapter_image_embeds,
-        #         device,
-        #         batch_size * num_images_per_prompt,
-        #         self.do_classifier_free_guidance,
-        #     )
-        #     added_cond_kwargs["image_embeds"] = image_embeds
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds.to(self.device), 
+                    "time_ids": add_time_ids.to(self.device)
+                }
+            elif model.type == "sd3":
+                raise ValueError(f"Model  type '{model.type}' cannot be used!")
 
-        # # TODO: Optionally get Guidance Scale Embedding
-        # timestep_cond = None
-        # if self.unet.config.time_cond_proj_dim is not None:
-        #     guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
-        #     timestep_cond = self.get_guidance_scale_embedding(
-        #         guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
-        #     ).to(device=device, dtype=latents.dtype)
+            # # TODO: Optionally get Guidance Scale Embedding
+            # timestep_cond = None
+            # if self.unet.config.time_cond_proj_dim is not None:
+            #     guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
+            #     timestep_cond = self.get_guidance_scale_embedding(
+            #         guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
+            #     ).to(device=device, dtype=latents.dtype)
         ###############################################################################################
         
 
@@ -693,7 +465,7 @@ class StableDiffusionMultitaskPipeline():
             # TODO: Перенести на сторону UNet модели и добавить параметр self.inpainting: bool
             # Если код в условии на 9 каналов не сработал, то это значит, что предсказание модели было получено при помощи
             # модели имеющей 4 канала и трюка с максикрованием шума на этапе денойзинга 
-            if self.task == "inpaint" and model.unet.config.in_channels == 4:
+            if task == "inpaint" and model.unet.config.in_channels == 4:
                 init_latents_proper = image_latents
                 if self.do_cfg:
                     init_mask, _ = mask.chunk(2)
