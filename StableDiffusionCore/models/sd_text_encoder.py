@@ -1,4 +1,5 @@
 import torch
+from dataclasses import dataclass
 from transformers import (
     CLIPImageProcessor,
     CLIPTextModel,
@@ -11,75 +12,135 @@ from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
 
 
+@dataclass
+class StableDiffusionTextEncoderOutput:
+    prompt_embeds_1: torch.Tensor
+    prompt_embeds_2: Optional[torch.Tensor]
+    pooled_prompt_embeds: Optional[torch.Tensor]
+
+    def get_embeddings(
+        self,
+        model_type: str,
+        use_refiner: bool = False,
+        num_images_per_prompt: int = 1,
+    ):
+        """
+        По сути просто формирует и выплёвывает эмбеддинги для нужной модельки
+        """
+        if model_type == "sd15":
+            bs_embed, seq_len, _ = self.prompt_embeds_1.shape
+            prompt_embeds = self.prompt_embeds_1.repeat(1, num_images_per_prompt, 1)
+            prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+
+            return (prompt_embeds, None)
+        elif model_type == "sdxl":
+            prompt_embeds = (
+                self.prompt_embeds_2
+                if use_refiner else
+                torch.concat([self.prompt_embeds_1, self.prompt_embeds_2], dim=-1)
+            )
+
+            bs_embed, seq_len, _ = prompt_embeds.shape
+            prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+            prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            pooled_prompt_embeds = self.pooled_prompt_embeds_2.repeat(1, num_images_per_prompt)
+            pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed * num_images_per_prompt, -1)
+
+            return (prompt_embeds, pooled_prompt_embeds)
+        elif model_type == "sd3":
+            pass
+        else:
+            raise ValueError(f"Unknown model type '{model_type}'")
+
+
+
 class StableDiffusionTextEncoderModel():
+    """
+    This class contains optional parts of different 
+    stable diffusion's text encoder realisations
+    """
+    tokenizer: CLIPTokenizer
+    text_encoder: Union[CLIPTextModel, CLIPTextModelWithProjection]
+    tokenizer_2: Optional[CLIPTokenizer]
+    text_encoder_2: Optional[CLIPTextModelWithProjection]
+
     def __init__(
         self,
         model_path: str,
         model_type: Optional[str] = None,
         device: str = "cuda",
     ):  
-        # Инитим константы
+        # Инициализируем константы
         self.path = model_path
         self.type = model_type or "sd15"
         self.device = torch.device(device)
 
-        # Инитим модели
-        self.tokenizers: list[CLIPTokenizer]
-        self.text_encoders: list[Union[CLIPTextModel, CLIPTextModelWithProjection]]
-        if model_type == "sd15":
-            self.tokenizers = [
-                CLIPTokenizer.from_pretrained(
-                    model_path, 
-                    subfolder="tokenizer"
-                )
-            ]
-            self.text_encoders = [
-                CLIPTextModel.from_pretrained(
-                    model_path, 
-                    subfolder="text_encoder", 
-                    torch_dtype=torch.float16,
-                    variant='fp16',
-                    use_safetensors=True
-                )
-            ]
-        elif model_type == "sdxl":
-            self.tokenizers = [
-                CLIPTokenizer.from_pretrained(
-                    model_path, 
-                    subfolder="tokenizer"
-                ),
-                CLIPTokenizer.from_pretrained(
-                    model_path,
-                    subfolder='tokenizer_2'
-                )
-            ]
-            self.text_encoders = [
-                CLIPTextModel.from_pretrained(
-                    model_path, 
-                    subfolder="text_encoder", 
-                    torch_dtype=torch.float16,
-                    variant='fp16',
-                    use_safetensors=True
-                ),
-                CLIPTextModelWithProjection.from_pretrained(
-                    model_path,
-                    subfolder='text_encoder_2', 
-                    torch_dtype=torch.float16,
-                    variant='fp16',
-                    use_safetensors=True
-                )
-            ]
-        elif model_type == "sd3":
+        # Инициализируем модели
+        if self.type == "sd15":
+            # убираем из модели лишние части
+            if hasattr(self, "tokenizer_2"):
+                delattr(self, "tokenizer_2")
+            if hasattr(self, "text_encoder_2"):
+                delattr(self, "text_encoder_2")
+            
+            # инитим нужные
+            self.tokenizer = CLIPTokenizer.from_pretrained(
+                model_path, 
+                subfolder="tokenizer"
+            )
+            self.text_encoder = CLIPTextModel.from_pretrained(
+                model_path, 
+                subfolder="text_encoder", 
+                torch_dtype=torch.float16,
+                variant='fp16',
+                use_safetensors=True
+            )
+        elif self.type == "sdxl":
+            self.tokenizer = CLIPTokenizer.from_pretrained(
+                model_path, 
+                subfolder="tokenizer"
+            )
+            self.text_encoder = CLIPTextModel.from_pretrained(
+                model_path, 
+                subfolder="text_encoder", 
+                torch_dtype=torch.float16,
+                variant='fp16',
+                use_safetensors=True
+            )
+            self.tokenizer_2 = CLIPTokenizer.from_pretrained(
+                model_path,
+                subfolder='tokenizer_2'
+            )
+            self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
+                model_path,
+                subfolder='text_encoder_2', 
+                torch_dtype=torch.float16,
+                variant='fp16',
+                use_safetensors=True
+            )
+        elif self.type == "sd3":
             pass
         else:
-            raise ValueError(f"Unknown model type '{model_type}'")
+            raise ValueError(f"Unknown model_type '{self.type}'")   
+        
         self.to(device)
-        print(f"TextEncoder model has successfully loaded from '{model_path}' checkpoint!")
+
+    @property
+    def text_encoder_projection_dim(self):
+        return (
+            self.text_encoder_2.config.projection_dim 
+            if hasattr(self, "text_encoder_2") else
+            None
+        )
 
 
     def to(self, device):
-        for text_encoder in self.text_encoders:
-            text_encoder.to(device)
+        self.text_encoder = self.text_encoder.to(device)
+        if hasattr(self, "text_encoder_2"):
+            self.text_encoder_2 = self.text_encoder_2.to(device)
+        # if hasattr(self, "text_encoder_3"):
+        #     self.text_encoder_3 = self.text_encoder_3.to(device)
+        
         self.device = torch.device(device)
 
 
@@ -96,172 +157,96 @@ class StableDiffusionTextEncoderModel():
         )
 
 
-    @property
-    def text_encoder_projection_dim(self):
-        return (
-            self.text_encoders[1].config.projection_dim 
-            if self.type == "sdxl" else
-            None
-        )
-
-
-    def normalize_prompts_to_list(
+    def __call__(
         self, 
+        batch_size: int,
         prompt: Optional[Union[str, List[str]]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
         prompt_3: Optional[Union[str, List[str]]] = None,
-        batch_size: Optional[int] = None,
-    ):
-        prompt = prompt or ""
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        # Проверка, что размеры промптов совпадают (для негатива в большей степени)
-        if batch_size != len(prompt):
-            prompt = batch_size * prompt
-        
-        if self.type == "sd15":
-            prompts = [prompt]    
-        elif self.type == "sdxl":
-            prompt_2 = prompt_2 or prompt
-            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
-
-            prompts = [prompt, prompt_2]
-        elif self.type == "sd3":
-            prompt_2 = prompt_2 or prompt
-            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
-            prompt_3 = prompt_3 or prompt
-            prompt_3 = [prompt_3] if isinstance(prompt_3, str) else prompt_3
-
-            prompts = [prompt, prompt_2, prompt_3]
-        else: 
-            raise ValueError(f"Unknown type {self.type}")
-
-        return prompts
-    
-            
-    def encode_prompt(
-        self,
-        prompts: List[List[str]],
-        clip_skip: Optional[int] = None,
-        num_images_per_prompt: int = 1,
         lora_scale: Optional[float] = None,
-    ) -> Tuple[Tuple[torch.Tensor]]:
+        clip_skip: Optional[int] = None,
+    ):
         """
         Encodes the prompt into text encoder hidden states.
         """
+        prompt = prompt or ""
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        
+        # Проверка, что размеры промптов совпадают (для негатива в большей степени)
+        if batch_size != len(prompt):
+            prompt = batch_size * prompt
+
         # set lora scale so that monkey patched LoRA function of text encoder can correctly access it
-        if lora_scale:
+        if lora_scale is not None:
             [
                 scale_lora_layers(text_encoder, lora_scale) 
-                for text_encoder 
-                in self.text_encoders
-            ]
+                for text_encoder in text_encoders
+            ] 
 
-        # Получаем эмбеддинги
-        prompt_embeds_list = []
-        pooled_prompt_embeds = None
-        for prompt, tokenizer, text_encoder in zip(prompts, self.tokenizers, self.text_encoders):
-            # Токенизируем
-            text_input_ids = tokenizer(
+        # Получаем эмбеддинги 
+        output_embeds = {}
+        if self.type == "sd15":
+            text_input_ids = self.tokenizer(
                 prompt,
                 padding="max_length",
                 max_length=tokenizer.model_max_length,
                 truncation=True,
                 return_tensors="pt",
             ).input_ids
-            text_input_ids = text_input_ids.to(self.device)
+            text_input_ids = text_input_ids.to(self.device)            
 
-            # Получаем эмбеддинги
-            prompt_embeds = text_encoder(
+            encoder_output = self.text_encoder(
                 text_input_ids, output_hidden_states=True
             )
 
-            pooled_prompt_embeds = prompt_embeds[0]
+            output_embeds["prompt_embeds_1"] = (
+                self.text_encoder.text_model.final_layer_norm(encoder_output[-1][-(clip_skip + 1)])
+                if clip_skip is not None else
+                encoder_output[0]
+            )
+            output_embeds["pooled_prompt_embeds_1"] = encoder_output[0]
 
-            if clip_skip:
-                if self.type == "sd15":
-                    prompt_embeds = text_encoder.text_model.final_layer_norm(
-                        prompt_embeds[-1][-(clip_skip + 1)]
-                    )
-                elif self.type == "sdxl":
-                    prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
-                elif self.type == "sd3":
-                    # prompt_embeds = ...
-                    pass
-            else:
-                if self.type == "sd15":
-                    prompt_embeds = prompt_embeds[0]
-                elif self.type == "sdxl":
-                    prompt_embeds = prompt_embeds.hidden_states[-2]
-                elif self.type == "sd3":
-                    # prompt_embeds = ...
-                    pass
+        elif self.type == "sdxl":
+            prompt_2 = prompt_2 or prompt
+            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+            
+            prompts = [prompt, prompt_2]
+            tokenizers = [self.tokenizer, self.tokenizer_2]
+            text_encoders = [self.text_encoder, self.text_encoder_2]
+            for k, (prompt, tokenizer, text_encoder) in enumerate(zip(prompts, tokenizers, text_encoders)):
+                text_input_ids = tokenizer(
+                    prompt,
+                    padding="max_length",
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,
+                    return_tensors="pt",
+                ).input_ids
+                text_input_ids = text_input_ids.to(self.device)
 
-            prompt_embeds_list.append(prompt_embeds)
+                encoder_output = text_encoder(
+                    text_input_ids, 
+                    output_hidden_states=True
+                )
+
+                output_embeds[f"prompt_embeds_{k+1}"] = (
+                    encoder_output.hidden_states[-(clip_skip + 2)]
+                    if clip_skip is not None else
+                    encoder_output.hidden_states[-2]
+                )
+                output_embeds[f"pooled_prompt_embeds_{k+1}"] = encoder_output[0]
+            
+        elif self.type == "sd3":
+            pass
+        else: 
+            raise ValueError(f"Unknown type {self.type}")
         
-        prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
-
-
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        bs_embed, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
-        if self.type == "sdxl":
-            pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt)
-            pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed * num_images_per_prompt, -1)
-
-
         # Retrieve the original scale by scaling back the LoRA layers
-        if lora_scale:
+        if lora_scale is not None:
             [
                 unscale_lora_layers(text_encoder, lora_scale)
-                for text_encoder 
-                in self.text_encoders
+                for text_encoder in text_encoders
             ]
         
-        return prompt_embeds, pooled_prompt_embeds
-        
-
-    
-    def __call__(
-        self, 
-        prompt: Optional[Union[str, List[str]]] = None,
-        prompt_2: Optional[Union[str, List[str]]] = None,
-        prompt_3: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: Optional[int] = 1,
-        lora_scale: Optional[float] = None,
-        clip_skip: Optional[int] = None,
-    ):
-        """
-        Возвращает эмбедденги промптов
-        """
-        batch_size: int
-        prompt = prompt or ""
-        if isinstance(prompt, str):
-            batch_size = 1
-        elif isinstance(prompt, list):
-            batch_size = len(prompt)
-
-        # 1. Подготавливаем промпты
-        prompts = self.normalize_prompts_to_list(
-            prompt,
-            prompt_2,
-            prompt_3,
-            batch_size,
-        )
-        # 2. Получаем эмбеддинги
-        prompt_embeds, pooled_prompt_embeds = self.encode_prompt(
-            prompts,
-            clip_skip,
-            num_images_per_prompt,
-            lora_scale,
-        )
-        return prompt_embeds, pooled_prompt_embeds
-
-
-
-
-
-
+        return StableDiffusionTextEncoderOutput(**output_embeds)
 
 

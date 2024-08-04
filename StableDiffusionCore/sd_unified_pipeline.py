@@ -46,7 +46,7 @@ class StableDiffusionUnifiedPipeline():
             kwargs["denoising_start"] = kwargs.pop("denoising_end")
             return self.pipeline(
                 model,
-                latents=latents,   
+                refiner_latents=latents,   
                 **kwargs,
             )
         elif refiner ==  "Two-stage":
@@ -61,7 +61,6 @@ class StableDiffusionUnifiedPipeline():
             model.switch_denoising_model("refiner")
             return self.pipeline(
                 model,
-                use_refiner=True,
                 output_type='pt',
                 image=image,
                 **kwargs,

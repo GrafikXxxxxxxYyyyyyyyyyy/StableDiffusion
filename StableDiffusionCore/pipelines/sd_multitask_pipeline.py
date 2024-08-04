@@ -46,6 +46,8 @@ class StableDiffusionMultitaskPipeline():
         self,
         original_size,
         crops_coords_top_left,
+        aesthetic_score,
+        negative_aesthetic_score,
         target_size,
         negative_original_size,
         negative_crops_coords_top_left,
@@ -53,10 +55,17 @@ class StableDiffusionMultitaskPipeline():
         addition_time_embed_dim,
         expected_add_embed_dim,
         dtype,
-        text_encoder_projection_dim=None,
+        text_encoder_projection_dim,
+        requires_aesthetics_score,
     ):
-        add_time_ids = list(original_size + crops_coords_top_left + target_size)
-        add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
+        if requires_aesthetics_score:
+            add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
+            add_neg_time_ids = list(
+                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
+            )
+        else:
+            add_time_ids = list(original_size + crops_coords_top_left + target_size)
+            add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
 
         passed_add_embed_dim = (
             addition_time_embed_dim * len(add_time_ids) + text_encoder_projection_dim
@@ -185,7 +194,14 @@ class StableDiffusionMultitaskPipeline():
         denoising_end: Optional[float] = None,
         denoising_start: Optional[float] = None,
         refiner_latents: Optional[torch.FloatTensor] = None,
+        aesthetic_score: float = 6.0,
+        negative_aesthetic_score: float = 2.5,
+
+        # IP-Adapter
             # ip_adapter_image: Optional[PipelineImageInput] = None,
+
+        # ControlNet
+            # control_image: PipelineImageInput = None,
     ):  
         ###############################################################################################
         # 1. Prepare constants
@@ -208,39 +224,41 @@ class StableDiffusionMultitaskPipeline():
         # 2. Encode input prompt
         from StableDiffusionCore.models.sd_text_encoder import StableDiffusionTextEncoderModel
         ###############################################################################################
-        # TODO: Добавить в аргументы опциональные готовые эмбеддинги
-        prompt_embeds, pooled_prompt_embeds = model.text_encoder(
+        embeds_output = model.text_encoder(
+            batch_size,
             prompt,
             prompt_2,
             prompt_3,
-            num_images_per_prompt,
             lora_scale=None,
             clip_skip=None,
         )
+        prompt_embeds, pooled_prompt_embeds = embeds_output.get_embeddings(
+            model.type, 
+            model.use_refiner, 
+            num_images_per_prompt,
+        )
+
         if self.do_cfg:
-            negative_prompt_embeds, negative_pooled_prompt_embeds = model.text_encoder(
-                negative_prompt,
-                negative_prompt_2,
-                negative_prompt_3,
-                num_images_per_prompt,
+            negative_embeds_output = model.text_encoder(
+                batch_size,
+                prompt,
+                prompt_2,
+                prompt_3,
                 lora_scale=None,
                 clip_skip=None,
             )
-            
-            # # TODO: Positive prompt embeddings
-            # positive_prompt_embeds, positive_pooled_prompt_embeds = model.text_encoder(
-            #     positive_prompt,
-            #     positive_prompt_2,
-            #     positive_prompt_3,
-            #     num_images_per_prompt,
-            #     lora_scale=None,
-            #     clip_skip=None,
-            # )
+            negative_prompt_embeds, negative_pooled_prompt_embeds = negative_embeds_output.get_embeddings(
+                model.type, 
+                model.use_refiner,
+                num_images_per_prompt,
+            )
 
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
         ###############################################################################################
-
+        print(prompt_embeds.shape)
+        print(add_text_embeds.shape)
+        
 
 
         ###############################################################################################
@@ -364,7 +382,7 @@ class StableDiffusionMultitaskPipeline():
             masked_image_latents = masked_image_latents.to(device=self.device, dtype=prompt_embeds.dtype)
         ###############################################################################################
         # Если на вход пришли латенты с предыдущей стадии рефайнера, то просто используем их
-        if refiner_latents:
+        if refiner_latents is not None:
             latents = refiner_latents
 
 
@@ -389,16 +407,19 @@ class StableDiffusionMultitaskPipeline():
             if model.type == "sdxl":
                 # time ids
                 add_time_ids, add_neg_time_ids = self._get_add_time_ids(
-                    original_size=(height, width),
-                    crops_coords_top_left=(0, 0),
-                    target_size=(height, width),
-                    negative_original_size=(height, width),
-                    negative_crops_coords_top_left=(0, 0),
-                    negative_target_size=(height, width),
-                    addition_time_embed_dim=model.unet.config.addition_time_embed_dim,
-                    expected_add_embed_dim=model.unet.add_embed_dim,
-                    dtype=prompt_embeds.dtype,
-                    text_encoder_projection_dim=model.text_encoder.text_encoder_projection_dim,
+                    original_size = (height, width),
+                    crops_coords_top_left = (0, 0),
+                    aesthetic_score = aesthetic_score,
+                    negative_aesthetic_score = negative_aesthetic_score,
+                    target_size = (height, width),
+                    negative_original_size = (height, width),
+                    negative_crops_coords_top_left = (0, 0),
+                    negative_target_size = (height, width),
+                    addition_time_embed_dim = model.unet.config.addition_time_embed_dim,
+                    expected_add_embed_dim = model.unet.add_embed_dim,
+                    dtype = prompt_embeds.dtype,
+                    text_encoder_projection_dim = model.text_encoder.text_encoder_projection_dim,
+                    requires_aesthetics_score = model.use_refiner,
                 )
                 add_time_ids = add_time_ids.repeat(batch_size * num_images_per_prompt, 1)
                 add_neg_time_ids = add_neg_time_ids.repeat(batch_size * num_images_per_prompt, 1)
@@ -408,7 +429,7 @@ class StableDiffusionMultitaskPipeline():
 
                 added_cond_kwargs = {
                     "text_embeds": add_text_embeds.to(self.device), 
-                    "time_ids": add_time_ids.to(self.device)
+                    "time_ids": add_time_ids.to(self.device),
                 }
             elif model.type == "sd3":
                 raise ValueError(f"Model  type '{model.type}' cannot be used!")
@@ -462,9 +483,7 @@ class StableDiffusionMultitaskPipeline():
                 latents, 
             )
             
-            # TODO: Перенести на сторону UNet модели и добавить параметр self.inpainting: bool
-            # Если код в условии на 9 каналов не сработал, то это значит, что предсказание модели было получено при помощи
-            # модели имеющей 4 канала и трюка с максикрованием шума на этапе денойзинга 
+            # максикрование шума 
             if task == "inpaint" and model.unet.config.in_channels == 4:
                 init_latents_proper = image_latents
                 if self.do_cfg:
