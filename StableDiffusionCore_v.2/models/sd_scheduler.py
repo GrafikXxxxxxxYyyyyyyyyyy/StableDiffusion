@@ -81,7 +81,6 @@ class StableDiffusionScheduler:
             print(f"'{scheduler_name}' scheduler has successfully initialized")
 
 
-
     @property
     def config(self):
         return self.scheduler.config
@@ -164,14 +163,6 @@ class StableDiffusionScheduler:
         timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
 
         return timesteps, len(timesteps)
-    
-
-    def scale_model_input(
-        self,
-        latents: torch.FloatTensor,
-        timestep: int,
-    ):
-        return self.scheduler.scale_model_input(latents, timestep)
 
 
     def add_noise(
@@ -181,6 +172,14 @@ class StableDiffusionScheduler:
         timestep: int
     ):
         return self.scheduler.add_noise(latents, noise, timestep)
+    
+
+    def scale_model_input(
+        self,
+        latents: torch.FloatTensor,
+        timestep: int,
+    ):
+        return self.scheduler.scale_model_input(latents, timestep)
     
 
     def step(

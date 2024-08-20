@@ -2,8 +2,10 @@ import torch
 
 from dataclasses import dataclass
 from diffusers import AutoencoderKL
+from diffusers.utils import BaseOutput
 from typing import Any, Callable, Dict, List, Optional, Union
 from diffusers.image_processor import VaeImageProcessor, PipelineImageInput
+
 
 
 def retrieve_latents(
@@ -23,7 +25,7 @@ def retrieve_latents(
 
 
 @dataclass
-class StableDiffusionVAEInput:
+class StableDiffusionVAEInput(BaseOutput):
     image: Optional[PipelineImageInput] = None
     mask_image: Optional[PipelineImageInput] = None
     height: Optional[int] = None
@@ -38,15 +40,14 @@ class StableDiffusionVAEOutput:
         image_latents: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
         masked_image_latents: Optional[torch.Tensor] = None,
+        **kwargs,
     ):
-        super(StableDiffusionVAEOutput, self).__init__(
-            image_latents=image_latents,
-            mask=mask,
-            masked_image_latents=masked_image_latents,
-        )   
+        self.image_latents = image_latents
+        self.mask = mask
+        self.masked_image_latents = masked_image_latents
 
-
-    def __call__(
+    
+    def get_image_latents(
         self,
         num_images_per_prompt,
         device,
@@ -63,8 +64,8 @@ class StableDiffusionVAEOutput:
         # mask = mask.repeat(
         #     (batch_size * num_images_per_prompt) // mask.shape[0], 1, 1, 1
         # )
-        
-        return
+        pass
+    
 
 
 
@@ -133,21 +134,34 @@ class StableDiffusionVAE:
     def decode(
         self,
         latents: torch.Tensor,
-    ):
+    ):  
+        # unscale/denormalize the latents denormalize with the mean and std if available and not None
+        has_latents_mean = hasattr(self.config, "latents_mean") and self.config.latents_mean
+        has_latents_std = hasattr(self.config, "latents_std") and self.config.latents_std
+
+        if has_latents_mean and has_latents_std:
+            latents_mean = torch.tensor(self.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+            latents_std = torch.tensor(self.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+            latents = latents * latents_std / self.config.scaling_factor + latents_mean
+        else:
+            latents = latents / self.config.scaling_factor
+
         return self.vae.decode(latents, return_dict=False)[0]
     
 
     
-    def __call__(self, **input_kwargs: StableDiffusionVAEInput) -> Optional[StableDiffusionVAEOutput]:
+    def __call__(
+        self, 
+        image: Optional[PipelineImageInput] = None,
+        mask_image: Optional[PipelineImageInput] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
+        **kwargs,
+    ) -> Optional[StableDiffusionVAEOutput]:
         """
         Кодирует картинку и маску в латентное представление, если те переданы
-        """
-        image: Optional[PipelineImageInput] = None
-        mask_image: Optional[PipelineImageInput] = None
-        height: Optional[int] = None
-        width: Optional[int] = None
-        generator: Optional[torch.Generator] = None
-
+        """        
         device = self.device
         dtype = self.vae.dtype
 

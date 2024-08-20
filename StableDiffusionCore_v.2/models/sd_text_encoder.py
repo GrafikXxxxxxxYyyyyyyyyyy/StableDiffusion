@@ -7,48 +7,32 @@ from transformers import (
     CLIPVisionModelWithProjection,
 )
 from dataclasses import dataclass
+from diffusers.utils import BaseOutput
 from diffusers.utils.peft_utils import scale_lora_layers, unscale_lora_layers
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
-from StableDiffusionCore.sd_unified_pipeline import (
-    StableDiffusionPipelineInput, 
-    StableDiffusionPipelineOutput
-)
 
 
-##############################################################################################################
-# Input args
-##############################################################################################################
 @dataclass
-class StableDiffusionTextEncoderInput(StableDiffusionPipelineInput):
-    """
-    Docstring
-    """
-    prompt: Optional[Union[str, List[str]]]
-    prompt_2: Optional[Union[str, List[str]]]
-    batch_size: Optional[int]
-    lora_scale: Optional[float]
-    clip_skip: Optional[int]
-##############################################################################################################
+class StableDiffusionTextEncoderInput(BaseOutput):
+    prompt: Optional[Union[str, List[str]]] = None
+    prompt_2: Optional[Union[str, List[str]]] = None
+    lora_scale: Optional[float] = None
+    clip_skip: Optional[int] = None
 
 
 
-##############################################################################################################
-# Output args
-##############################################################################################################
-class StableDiffusionTextEncoderOutput(StableDiffusionPipelineOutput):
+
+class StableDiffusionTextEncoderOutput:
     def __init__(
         self,
         prompt_embeds_1: torch.Tensor,
-        prompt_embeds_2: Optional[torch.Tensor],
-        pooled_prompt_embeds: Optional[torch.Tensor],
+        prompt_embeds_2: Optional[torch.Tensor] = None,
+        pooled_prompt_embeds: Optional[torch.Tensor] = None,
     ):
-        # Делаю суперинит, чтобы явно изменить все поля кроме нужных на None 
-        super(StableDiffusionTextEncoderOutput, self).__init__(
-            prompt_embeds_1=prompt_embeds_1,
-            prompt_embeds_2=prompt_embeds_2,
-            pooled_prompt_embeds=pooled_prompt_embeds,
-        )
+        self.prompt_embeds_1 = prompt_embeds_1
+        self.prompt_embeds_2 = prompt_embeds_2
+        self.pooled_prompt_embeds = pooled_prompt_embeds
 
 
     def __call__(
@@ -56,8 +40,6 @@ class StableDiffusionTextEncoderOutput(StableDiffusionPipelineOutput):
         model_type: str,
         use_refiner: bool = False,
         num_images_per_prompt: int = 1,
-        # device,
-        # dtype,
     ):
         """
         По сути просто формирует и выплёвывает эмбеддинги для нужной модельки
@@ -93,7 +75,7 @@ class StableDiffusionTextEncoderOutput(StableDiffusionPipelineOutput):
         
         else:
             raise ValueError(f"Unknown model type '{model_type}'")
-##############################################################################################################
+
 
 
 
@@ -102,12 +84,6 @@ class StableDiffusionTextEncoder:
     This class contains optional parts of different 
     stable diffusion's text encoder realisations
     """
-    tokenizer: CLIPTokenizer
-    text_encoder: Union[CLIPTextModel, CLIPTextModelWithProjection]
-    tokenizer_2: Optional[CLIPTokenizer]
-    text_encoder_2: Optional[CLIPTextModelWithProjection]
-
-
     def __init__(
         self,
         model_path: str,
@@ -201,23 +177,19 @@ class StableDiffusionTextEncoder:
         )
 
 
-
-    def __call__(self, **input_kwargs: StableDiffusionTextEncoderInput) -> StableDiffusionTextEncoderOutput:
+    def __call__(
+        self, 
+        prompt: Optional[Union[str, List[str]]] = None,
+        prompt_2: Optional[Union[str, List[str]]] = None,
+        lora_scale: Optional[float] = None,
+        clip_skip: Optional[int] = None,
+        **kwargs,
+    ) -> StableDiffusionTextEncoderOutput:
         """
         Docstring
         """
-        prompt: Optional[Union[str, List[str]]] = None,
-        prompt_2: Optional[Union[str, List[str]]] = None,
-        batch_size: Optional[int] = None,
-        lora_scale: Optional[float] = None,
-        clip_skip: Optional[int] = None,
-
         prompt = prompt or ""
         prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        # Проверка, что размеры промптов совпадают (для негатива в большей степени)
-        if batch_size is not None and batch_size != len(prompt):
-            prompt = batch_size * prompt
         
         if self.type == "sd15":
             prompts = [prompt]   

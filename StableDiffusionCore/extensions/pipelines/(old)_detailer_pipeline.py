@@ -1,19 +1,25 @@
-import PIL
-import cv2
-import torch
-import numpy as np
-
-from dataclasses import dataclass
-from diffusers.utils import BaseOutput
-from PIL import Image, ImageFilter, ImageOps
+import inspect
 from typing import Any, Callable, Iterable, List, Mapping, Optional
 
-from ..models.detailer_model import StableDiffusionDetailerModel
+# Собственно проглядывается ещё старая структура, которую я и начал менять посреди установки рефайнера
+# from StableDiffusion.sd import StableDiffusionUnifiedPipeline
+# from pipeline_extensions.detailer.detailer_model import DetailerModel
+
+from dataclasses import dataclass
+import cv2
+import torch
+import PIL
+import numpy as np
+from diffusers.utils import BaseOutput
+from PIL import Image, ImageFilter, ImageOps
+from ultralytics import YOLO 
+from pathlib import Path
+
 from StableDiffusionCore.sd_unified_pipeline import StableDiffusionUnifiedPipeline
 
 
 
-def convert_pt_to_pil(images: torch.Tensor) -> List[Image.Image]:
+def convert_pt_to_pil(images: torch.Tensor) -> List[PIL.Image.Image]:
     pil_images = []
     for idx in range(len(images)):
         img = (images[idx] / 2 + 0.5).clamp(0, 1)
@@ -24,10 +30,12 @@ def convert_pt_to_pil(images: torch.Tensor) -> List[Image.Image]:
     return pil_images
 
 
+
 @dataclass
 class ADOutput(BaseOutput):
     images: list[Image.Image]
     init_images: list[Image.Image]
+
 
 
 class StableDiffusionDetailerPipeline():
@@ -49,7 +57,7 @@ class StableDiffusionDetailerPipeline():
     def __call__(
         self, 
         images: List[Image.Image],
-        detailer_model: StableDiffusionDetailerModel,
+        detailer_model: DetailerModel,
         **inference_kwargs,
     ):  
         """
@@ -78,23 +86,23 @@ class StableDiffusionDetailerPipeline():
                 bbox_padded = self.bbox_padding(bbox, init_image.size)
                 print("padded dim:", bbox_padded)
 
-                # ########################################################
-                # # Inpainting mask region
-                # ########################################################
-                # # Вырезаем из изображения лицо и его маску
-                # crop_image = init_image.crop(bbox_padded)
-                # crop_mask = mask.crop(bbox_padded)
+                ########################################################
+                # Inpainting mask region
+                ########################################################
+                # Вырезаем из изображения лицо и его маску
+                crop_image = init_image.crop(bbox_padded)
+                crop_mask = mask.crop(bbox_padded)
 
-                # # Добавляем вырезанные изображения в Inpainting pipeline
-                # inference_kwargs["image"] = crop_image
-                # inference_kwargs["mask_image"] = crop_mask
-                # inference_kwargs["strength"] = self.strength
+                # Добавляем вырезанные изображения в Inpainting pipeline
+                inference_kwargs["image"] = crop_image
+                inference_kwargs["mask_image"] = crop_mask
+                inference_kwargs["strength"] = self.strength
                 
-                # print(f"Detailer '{detailer_model.type}' inpainting...")
-                # inpaint_output = pipeline(**inference_kwargs)
-                # if isinstance(inpaint_output, torch.Tensor):
-                #     inpaint_output = convert_pt_to_pil(inpaint_output)
-                # ########################################################
+                print(f"Detailer '{detailer_model.type}' inpainting...")
+                inpaint_output = pipeline(**inference_kwargs)
+                if isinstance(inpaint_output, torch.Tensor):
+                    inpaint_output = convert_pt_to_pil(inpaint_output)
+                ########################################################
                 
                 inpaint_image = inpaint_output[0]
                 final_image = self.composite(
