@@ -236,8 +236,8 @@ class StableDiffusionUnifiedPipeline():
                 # 6. Prepare latent variables
                 add_noise = True if denoising_start is None else False
                 latents = self.prepare_latents_img2img(
-                    model.vae,
-                    model.scheduler,
+                    # model.vae,
+                    # model.scheduler,
                     image,
                     latent_timestep,
                     batch_size,
@@ -767,21 +767,21 @@ class StableDiffusionUnifiedPipeline():
         # Если изображение не в формате латентов, кодирует изображение в латентное представление с использованием VAE
         else:
             # Апкастим ВАЕ, если это необходимо
-            if self.vae.config.force_upcast:
+            if self.model.vae.config.force_upcast:
                 image = image.float()
-                self.vae.to(dtype=torch.float32)
+                self.model.vae.to(dtype=torch.float32)
 
             generator = None
             if seed is not None:
                 generator = torch.Generator(device=self.device).manual_seed(int(seed))
 
-            init_latents = retrieve_latents(self.vae.encode(image), generator=generator)
+            init_latents = retrieve_latents(self.model.vae.encode(image), generator=generator)
 
-            if self.vae.config.force_upcast:
-                self.vae.to(dtype)
+            if self.model.vae.config.force_upcast:
+                self.model.vae.to(dtype)
 
             init_latents = init_latents.to(dtype)
-            init_latents = self.vae.config.scaling_factor * init_latents
+            init_latents = self.model.vae.config.scaling_factor * init_latents
 
         
         # Тупо выравнивает размеры батчей
@@ -806,7 +806,7 @@ class StableDiffusionUnifiedPipeline():
                 dtype=dtype
             )
             # get latents
-            init_latents = self.scheduler.add_noise(init_latents, noise, timestep)
+            init_latents = self.model.scheduler.add_noise(init_latents, noise, timestep)
 
         latents = init_latents
 
