@@ -7,7 +7,7 @@ import numpy as np
 import torch.nn.functional as F
 
 from tqdm.notebook import tqdm
-from models.stable_diffusion import SDModelWrapper
+from ..models.stable_diffusion import SDModelWrapper
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.utils.peft_utils import scale_lora_layers
 from diffusers.image_processor import VaeImageProcessor
