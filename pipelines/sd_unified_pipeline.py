@@ -6,6 +6,7 @@ import itertools
 import numpy as np
 import torch.nn.functional as F
 
+from PIL import Image
 from tqdm.notebook import tqdm
 from ..models.stable_diffusion import SDModelWrapper
 from diffusers.utils.torch_utils import randn_tensor
@@ -23,6 +24,19 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline, 
     StableDiffusionXLInpaintPipeline,
 )
+
+
+
+# Переводим тензор в PIL.Image
+def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
+    # Убедимся, что тензор находится на CPU и значения в [0, 1]
+    tensor = (tensor + 1) / 2
+    tensor = tensor.detach().cpu().clamp(0, 1)
+    # Преобразуем в [H, W, C] и в numpy
+    image = tensor.permute(1, 2, 0).numpy()
+    # Переводим в uint8
+    image = (image * 255).astype("uint8")
+    return Image.fromarray(image)
 
 
 
@@ -81,9 +95,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-def retrieve_latents(
-    encoder_output: torch.Tensor, generator: Optional[torch.Generator] = None, sample_mode: str = "sample"
-):
+def retrieve_latents(encoder_output: torch.Tensor, generator: Optional[torch.Generator] = None, sample_mode: str = "sample"):
     if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
         return encoder_output.latent_dist.sample(generator)
     elif hasattr(encoder_output, "latent_dist") and sample_mode == "argmax":
@@ -216,6 +228,7 @@ class StableDiffusionUnifiedPipeline():
                 seed,
                 latents,
             )
+            self.is_inpaint = False
             print(f"Text to image latents: {latents.shape}")
         else:
             ########################################################################################################################################
@@ -223,10 +236,10 @@ class StableDiffusionUnifiedPipeline():
             ########################################################################################################################################
             if mask_image is None:
                 # 4. Preprocess image
-                image = model.image_processor.preprocess(image)
+                image = self.model.image_processor.preprocess(image)
 
                 timesteps, num_inference_steps = self.get_timesteps(
-                    model.scheduler,
+                    self.model.scheduler,
                     num_inference_steps,
                     strength,
                     denoising_start if denoising_value_valid(denoising_start) else None,
@@ -236,8 +249,6 @@ class StableDiffusionUnifiedPipeline():
                 # 6. Prepare latent variables
                 add_noise = True if denoising_start is None else False
                 latents = self.prepare_latents_img2img(
-                    # model.vae,
-                    # model.scheduler,
                     image,
                     latent_timestep,
                     batch_size,
@@ -250,9 +261,9 @@ class StableDiffusionUnifiedPipeline():
 
                 # Переопределяем размеры исходя из полученных латентов
                 height, width = latents.shape[-2:]
-                height = height * model.vae_scale_factor
-                width = width * model.vae_scale_factor
-
+                height = height * self.model.vae_scale_factor
+                width = width * self.model.vae_scale_factor
+                self.is_inpaint = False
             ########################################################################################################################################
             # Ну и если есть и картинка и маска --> inpainting
             ########################################################################################################################################
@@ -285,7 +296,6 @@ class StableDiffusionUnifiedPipeline():
 
 
                 timesteps, num_inference_steps = self.get_timesteps(
-                    model.scheduler,
                     num_inference_steps,
                     strength,
                     denoising_start if denoising_value_valid(denoising_start) else None,
@@ -303,19 +313,18 @@ class StableDiffusionUnifiedPipeline():
 
 
                 # 6. Prepare latent variables
-                num_channels_latents = model.vae.config.latent_channels
-                num_channels_unet = model.base.config.in_channels
+                num_channels_latents = self.model.vae.config.latent_channels
+                num_channels_unet = self.model.base.config.in_channels
                 return_image_latents = num_channels_unet == 4
 
                 add_noise = True if denoising_start is None else False
                 shape = (
                     batch_size * num_images_per_prompt,
                     num_channels_latents,
-                    height // model.vae_scale_factor,
-                    width // model.vae_scale_factor,
+                    height // self.model.vae_scale_factor,
+                    width // self.model.vae_scale_factor,
                 )
                 latents_outputs = self.prepare_latents_inpaint(
-                    model.scheduler,
                     shape,
                     prompt_embeds.dtype,
                     seed,                
@@ -328,6 +337,7 @@ class StableDiffusionUnifiedPipeline():
                     return_image_latents=return_image_latents,
                 )
 
+                image_latents = None
                 if return_image_latents:
                     latents, noise, image_latents = latents_outputs
                 else:
@@ -339,8 +349,8 @@ class StableDiffusionUnifiedPipeline():
                     mask,
                     masked_image,
                     batch_size * num_images_per_prompt,
-                    height // model.vae_scale_factor,
-                    width // model.vae_scale_factor,
+                    height // self.model.vae_scale_factor,
+                    width // self.model.vae_scale_factor,
                     prompt_embeds.dtype,
                     seed,
                 )
@@ -369,6 +379,7 @@ class StableDiffusionUnifiedPipeline():
                 height, width = latents.shape[-2:]
                 height = height * model.vae_scale_factor
                 width = width * model.vae_scale_factor  
+                self.is_inpaint = True
         ############################################################################################################################################
 
         # 9.1 Apply denoising_end
@@ -448,17 +459,54 @@ class StableDiffusionUnifiedPipeline():
         #         guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
         #     ).to(device=device, dtype=latents.dtype)
 
+
+
+        ############################################################################################################################################
         # Denoising loop
-        latents = self.denoise_batch(
-            latents,
-            timesteps,
-            prompt_embeds,
-            denoising_start=denoising_start,
-            denoising_end=denoising_end,
-            added_cond_kwargs=added_cond_kwargs,
-            cross_attention_kwargs=cross_attention_kwargs,
-            guidance_scale=guidance_scale,
-        )
+        ############################################################################################################################################
+        for i, t in tqdm(enumerate(timesteps)):
+            # Удваиваем количество латентов если работаем в режиме do_cfg=True 
+            latent_model_input = latents
+            if self.do_classifier_free_guidance:
+                latent_model_input = torch.cat([latents] * 2)
+
+            # По сути просто заглушка, которая не делает ничего с latent_model_input для DDPM/DDIM/PNDM 
+            latent_model_input = self.model.scheduler.scale_model_input(latent_model_input, t)
+
+            # Получаем предсказание шума моделью 
+            noise_pred = self.model.base(
+                latent_model_input,
+                t,
+                prompt_embeds,
+                cross_attention_kwargs=cross_attention_kwargs,
+                added_cond_kwargs=added_cond_kwargs,
+                return_dict=False,
+            )[0]
+
+            if self.do_classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = guidance_scale * (noise_pred_text - noise_pred_uncond) + noise_pred_uncond
+
+            # Вычисляем шумный латент с предыдущего шага x_t -> x_t-1
+            latents = self.model.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
+            # Inpaint
+            if num_channels_unet == 4 and self.is_inpaint:
+                init_latents_proper = image_latents
+                if self.do_classifier_free_guidance:
+                    init_mask, _ = mask.chunk(2)
+                else:
+                    init_mask = mask
+
+                if i < len(timesteps) - 1:
+                    noise_timestep = timesteps[i + 1]
+                    init_latents_proper = self.model.scheduler.add_noise(
+                        init_latents_proper, noise, torch.tensor([noise_timestep])
+                    )
+
+                latents = (1 - init_mask) * init_latents_proper + init_mask * latents
+        ############################################################################################################################################
+
 
         # Опционально возвращаем либо картинку, либо латент
         if self.output_type == "pt":
@@ -675,7 +723,6 @@ class StableDiffusionUnifiedPipeline():
  
     def get_timesteps(
         self, 
-        scheduler,
         num_inference_steps, 
         strength, 
         denoising_start=None
@@ -687,20 +734,20 @@ class StableDiffusionUnifiedPipeline():
         else:
             t_start = 0
 
-        timesteps = scheduler.timesteps[t_start * scheduler.order :]
+        timesteps = self.model.scheduler.timesteps[t_start * self.model.scheduler.order :]
 
         # Strength is irrelevant if we directly request a timestep to start at;
         # that is, strength is determined by the denoising_start instead.
         if denoising_start is not None:
             discrete_timestep_cutoff = int(
                 round(
-                    scheduler.config.num_train_timesteps
-                    - (denoising_start * scheduler.config.num_train_timesteps)
+                    self.model.scheduler.config.num_train_timesteps
+                    - (denoising_start * self.model.scheduler.config.num_train_timesteps)
                 )
             )
 
             num_inference_steps = (timesteps < discrete_timestep_cutoff).sum().item()
-            if scheduler.order == 2 and num_inference_steps % 2 == 0:
+            if self.model.scheduler.order == 2 and num_inference_steps % 2 == 0:
                 # if the scheduler is a 2nd order scheduler we might have to do +1
                 # because `num_inference_steps` might be even given that every timestep
                 # (except the highest one) is duplicated. If `num_inference_steps` is even it would
@@ -718,7 +765,6 @@ class StableDiffusionUnifiedPipeline():
 
     def prepare_latents_txt2img(
         self, 
-        scheduler,
         shape,
         dtype, 
         seed=None, 
@@ -738,7 +784,7 @@ class StableDiffusionUnifiedPipeline():
         else:
             latents = latents.to(self.device)
         # scale the initial noise by the standard deviation required by the scheduler
-        latents = latents * scheduler.init_noise_sigma
+        latents = latents * self.model.scheduler.init_noise_sigma
 
         return latents
     
@@ -766,24 +812,12 @@ class StableDiffusionUnifiedPipeline():
             init_latents = image
         # Если изображение не в формате латентов, кодирует изображение в латентное представление с использованием VAE
         else:
-            # Апкастим ВАЕ, если это необходимо
-            if self.model.vae.config.force_upcast:
-                image = image.float()
-                self.model.vae.to(dtype=torch.float32)
-
             generator = None
             if seed is not None:
                 generator = torch.Generator(device=self.device).manual_seed(int(seed))
 
-            init_latents = retrieve_latents(self.model.vae.encode(image), generator=generator)
+            init_latents = self._encode_vae_image(image, generator)
 
-            if self.model.vae.config.force_upcast:
-                self.model.vae.to(dtype)
-
-            init_latents = init_latents.to(dtype)
-            init_latents = self.model.vae.config.scaling_factor * init_latents
-
-        
         # Тупо выравнивает размеры батчей
         if batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] == 0:
             # expand init_latents for batch_size
@@ -815,7 +849,6 @@ class StableDiffusionUnifiedPipeline():
 
     def prepare_latents_inpaint(
         self,
-        scheduler,
         shape,
         dtype,                          # Тип данных (например, torch.float32)
         seed=None,                      # Генератор для создания случайных чисел
@@ -856,13 +889,13 @@ class StableDiffusionUnifiedPipeline():
             # Генерация шума
             noise = randn_tensor(shape, generator=generator, device=self.device, dtype=dtype)
             # Если сила максимальная, используем шум как начальные латенты, иначе комбинируем изображение и шум
-            latents = noise if is_strength_max else scheduler.add_noise(image_latents, noise, timestep)
+            latents = noise if is_strength_max else self.model.scheduler.add_noise(image_latents, noise, timestep)
             # Если используется чистый шум, масштабируем начальные латенты с учетом начальной сигмы шума
-            latents = latents * scheduler.init_noise_sigma if is_strength_max else latents
+            latents = latents * self.model.scheduler.init_noise_sigma if is_strength_max else latents
         elif add_noise:
             # Если начальные латенты заданы, используем их как шум и масштабируем
             noise = latents.to(self.device)
-            latents = noise * scheduler.init_noise_sigma
+            latents = noise * self.model.scheduler.init_noise_sigma
         else:
             # Если шум не нужно добавлять, просто генерируем новый шум
             noise = randn_tensor(shape, generator=generator, device=self.device, dtype=dtype)
@@ -909,6 +942,10 @@ class StableDiffusionUnifiedPipeline():
             mask = mask.repeat(batch_size // mask.shape[0], 1, 1, 1)
 
         mask = torch.cat([mask] * 2) if self.do_classifier_free_guidance else mask
+
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(device=self.device).manual_seed(int(seed))
 
         if masked_image is not None and masked_image.shape[1] == 4:
             masked_image_latents = masked_image
@@ -977,72 +1014,31 @@ class StableDiffusionUnifiedPipeline():
         add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
 
         return add_time_ids, add_neg_time_ids
+
+
+    def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
+        # Апкастим VAE, если это необходимо
+        dtype = image.dtype
+        if self.model.vae.config.force_upcast:
+            image = image.float()
+            self.model.vae.to(dtype=torch.float32)
+
+        # Получаем латенты изображения в зависимости от генератора
+        if isinstance(generator, list):
+            image_latents = [
+                retrieve_latents(self.model.vae.encode(image[i : i + 1]), generator=generator[i])
+                for i in range(image.shape[0])
+            ]
+            image_latents = torch.cat(image_latents, dim=0)
+        else:
+            image_latents = retrieve_latents(self.model.vae.encode(image), generator=generator)
+        
+        # Обратный даункастинг VAE
+        if self.model.vae.config.force_upcast:
+            self.model.vae.to(dtype)
+
+        image_latents = image_latents.to(dtype)
+        image_latents = self.model.vae.config.scaling_factor * image_latents
+
+        return image_latents
     
-
-
-    def denoise_batch(
-        self, 
-        latents: torch.FloatTensor,
-        timesteps: List[int],
-        encoder_hidden_states: torch.FloatTensor,
-        denoising_start: Optional[float] = None,
-        denoising_end: Optional[float] = None,
-        added_cond_kwargs: Optional[Dict[str, Any]] = None,
-        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-        guidance_scale: float = 7.5,
-    ):
-        for t in tqdm(timesteps):
-            # Удваиваем количество латентов если работаем в режиме do_cfg=True 
-            latent_model_input = latents
-            if self.do_classifier_free_guidance:
-                latent_model_input = torch.cat([latents] * 2)
-            # По сути просто заглушка, которая не делает ничего с latent_model_input для DDPM/DDIM/PNDM 
-            latent_model_input = self.model.scheduler.scale_model_input(latent_model_input, t)
-
-            # Получаем предсказание шума моделью 
-            noise_pred = self.model.base(
-                latent_model_input,
-                t,
-                encoder_hidden_states,
-                cross_attention_kwargs=cross_attention_kwargs,
-                added_cond_kwargs=added_cond_kwargs,
-                return_dict=False,
-            )[0]
-
-            if self.do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = guidance_scale * (noise_pred_text - noise_pred_uncond) + noise_pred_uncond
-
-            # Вычисляем шумный латент с предыдущего шага x_t -> x_t-1
-            latents = self.model.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-
-
-            # # Inpaint
-            # if num_channels_unet == 4:
-            #     init_latents_proper = image_latents
-            #     if self.do_classifier_free_guidance:
-            #         init_mask, _ = mask.chunk(2)
-            #     else:
-            #         init_mask = mask
-
-            #     if i < len(timesteps) - 1:
-            #         noise_timestep = timesteps[i + 1]
-            #         init_latents_proper = self.scheduler.add_noise(
-            #             init_latents_proper, noise, torch.tensor([noise_timestep])
-            #         )
-
-            #     latents = (1 - init_mask) * init_latents_proper + init_mask * latents
-
-
-        return latents
-    
-
-
-
-
-
-
-
-
-
-
