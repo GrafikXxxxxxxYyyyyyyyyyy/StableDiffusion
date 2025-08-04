@@ -222,7 +222,6 @@ class StableDiffusionUnifiedPipeline():
                 width // self.model.vae_scale_factor,
             )
             latents = self.prepare_latents_txt2img(
-                self.model.scheduler,
                 shape,
                 prompt_embeds.dtype,
                 seed,
@@ -239,7 +238,6 @@ class StableDiffusionUnifiedPipeline():
                 image = self.model.image_processor.preprocess(image)
 
                 timesteps, num_inference_steps = self.get_timesteps(
-                    self.model.scheduler,
                     num_inference_steps,
                     strength,
                     denoising_start if denoising_value_valid(denoising_start) else None,
@@ -343,7 +341,7 @@ class StableDiffusionUnifiedPipeline():
                 else:
                     latents, noise = latents_outputs
 
-
+        
                 # 7. Prepare mask latent variables
                 mask, masked_image_latents = self.prepare_mask_latents(
                     mask,
@@ -491,20 +489,21 @@ class StableDiffusionUnifiedPipeline():
             latents = self.model.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
             # Inpaint
-            if num_channels_unet == 4 and self.is_inpaint:
-                init_latents_proper = image_latents
-                if self.do_classifier_free_guidance:
-                    init_mask, _ = mask.chunk(2)
-                else:
-                    init_mask = mask
+            if self.is_inpaint:
+                if num_channels_unet == 4:
+                    init_latents_proper = image_latents
+                    if self.do_classifier_free_guidance:
+                        init_mask, _ = mask.chunk(2)
+                    else:
+                        init_mask = mask
 
-                if i < len(timesteps) - 1:
-                    noise_timestep = timesteps[i + 1]
-                    init_latents_proper = self.model.scheduler.add_noise(
-                        init_latents_proper, noise, torch.tensor([noise_timestep])
-                    )
+                    if i < len(timesteps) - 1:
+                        noise_timestep = timesteps[i + 1]
+                        init_latents_proper = self.model.scheduler.add_noise(
+                            init_latents_proper, noise, torch.tensor([noise_timestep])
+                        )
 
-                latents = (1 - init_mask) * init_latents_proper + init_mask * latents
+                    latents = (1 - init_mask) * init_latents_proper + init_mask * latents
         ############################################################################################################################################
 
 
