@@ -1,8 +1,8 @@
 import os
 import math
-import tqdm
 import torch
 from PIL import Image
+from tqdm import tqdm
 import torch.nn.functional as F
 from accelerate import Accelerator
 from torchvision import transforms
@@ -12,7 +12,7 @@ from typing import Any, Optional, Union, Dict
 from dataclasses import dataclass
 from ..models.stable_diffusion import SDModelWrapper
 from peft import LoraConfig
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline
 from diffusers.training_utils import cast_training_params
 from peft.utils import get_peft_model_state_dict
 from diffusers.utils import convert_state_dict_to_diffusers
@@ -54,6 +54,7 @@ class SDTrainingArgs:
     lr_warmup_steps: int = 500
     resolution: int = 1024
     max_grad_norm: float = 1.0
+    use_8bit_adam: bool = False
 
 
 
@@ -133,7 +134,7 @@ class SDLoRATrainer ():
         self.dataset = train_dataset
 
 
-    def encode_prompt(self, prompt):
+    def encode_prompt(self, prompt, prompt_2=None):
         tokenizers = [self.model.tokenizer]
         text_encoders = [self.model.text_encoder]
         prompt = [prompt] if isinstance(prompt, str) else prompt 
@@ -166,7 +167,7 @@ class SDLoRATrainer ():
 
             pooled_prompt_embeds = prompt_embeds[0]
             prompt_embeds = (
-                prompt_embeds.hidden_states[-2] 
+                prompt_embeds[-1][-2] 
                 if hasattr(self.model, "text_encoder_2") else 
                 prompt_embeds[0]
             )
@@ -192,6 +193,10 @@ class SDLoRATrainer ():
             gradient_accumulation_steps=self.args.gradient_accumulation_steps,
             mixed_precision=self.args.mixed_precision,
         )
+
+        # Disable AMP for MPS.
+        if torch.backends.mps.is_available():
+            accelerator.native_amp = False
         print("Accelerator OK!", accelerator.device)
 
 
@@ -210,9 +215,10 @@ class SDLoRATrainer ():
 
         # 4. Отключаем градиенты для нетренеруемых параметров
         self.model.vae.requires_grad_(False)
-        self.model.text_encoder.requires_grad_(False)
-        self.model.text_encoder_2.requires_grad_(False)
         self.model.base.requires_grad_(False)
+        self.model.text_encoder.requires_grad_(False)
+        if hasattr(self.model, "text_encoder_2"):
+            self.model.text_encoder_2.requires_grad_(False)
         print("Models OK!")
 
 
@@ -229,7 +235,8 @@ class SDLoRATrainer ():
         # The VAE is always in float32 to avoid NaN losses.
         self.model.vae.to(accelerator.device, dtype=torch.float32)
         self.model.text_encoder.to(accelerator.device, dtype=weight_dtype)
-        self.model.text_encoder_2.to(accelerator.device, dtype=weight_dtype)
+        if hasattr(self.model, "text_encoder_2"):
+            self.model.text_encoder_2.to(accelerator.device, dtype=weight_dtype)
 
 
         # 5. Загружаем в модели LoRA адаптеры
@@ -253,7 +260,8 @@ class SDLoRATrainer ():
                 target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
             )
             self.model.text_encoder.add_adapter(text_lora_config)
-            self.model.text_encoder_2.add_adapter(text_lora_config)
+            if hasattr(self.model, "text_encoder_2"):
+                self.model.text_encoder_2.add_adapter(text_lora_config)
         print("LoRA OK!")
 
         
@@ -261,19 +269,42 @@ class SDLoRATrainer ():
         if self.args.mixed_precision == "fp16":
             models = [self.model.base]
             if self.args.train_text_encoder:
-                models.extend([self.model.text_encoder, self.model.text_encoder_2])
+                if hasattr(self.model, "text_encoder_2"):
+                    models.extend([self.model.text_encoder, self.model.text_encoder_2])
+                else:
+                    models.extend([self.model.text_encoder])
             cast_training_params(models, dtype=torch.float32)
         
         
         # 7. Создаём оптимизатор
+        # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
+        if self.args.use_8bit_adam:
+            try:
+                import bitsandbytes as bnb
+            except ImportError:
+                raise ImportError(
+                    "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
+                )
+
+            optimizer_class = bnb.optim.AdamW8bit
+        else:
+            optimizer_class = torch.optim.AdamW
+
         params_to_optimize = list(filter(lambda p: p.requires_grad, self.model.base.parameters()))
         if self.args.train_text_encoder:
-            params_to_optimize = (
-                params_to_optimize
-                + list(filter(lambda p: p.requires_grad, self.model.text_encoder.parameters()))
-                + list(filter(lambda p: p.requires_grad, self.model.text_encoder_2.parameters()))
-            )
-        optimizer = torch.optim.AdamW(
+            if hasattr(self.model, "text_encoder_2"):
+                params_to_optimize = (
+                    params_to_optimize
+                    + list(filter(lambda p: p.requires_grad, self.model.text_encoder.parameters()))
+                    + list(filter(lambda p: p.requires_grad, self.model.text_encoder_2.parameters()))
+                )
+            else:
+                params_to_optimize = (
+                    params_to_optimize
+                    + list(filter(lambda p: p.requires_grad, self.model.text_encoder.parameters()))
+                )
+
+        optimizer = optimizer_class(
             params_to_optimize,
             lr=self.args.learning_rate,
             betas=(self.args.adam_beta1, self.args.adam_beta2),
@@ -328,9 +359,14 @@ class SDLoRATrainer ():
 
         # 9. Подготавливаем всё в акселератор
         if self.args.train_text_encoder:
-            self.model.base, self.model.text_encoder, self.model.text_encoder_2, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-                self.model.base, self.model.text_encoder, self.model.text_encoder_2, optimizer, train_dataloader, lr_scheduler
-            )
+            if hasattr(self.model, "text_encoder_2"):
+                self.model.base, self.model.text_encoder, self.model.text_encoder_2, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                    self.model.base, self.model.text_encoder, self.model.text_encoder_2, optimizer, train_dataloader, lr_scheduler
+                )
+            else:
+                self.model.base, self.model.text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                    self.model.base, self.model.text_encoder, optimizer, train_dataloader, lr_scheduler
+                )
         else:
             self.model.base, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
                 self.model.base, optimizer, train_dataloader, lr_scheduler
@@ -369,8 +405,7 @@ class SDLoRATrainer ():
             for step, batch in enumerate(train_dataloader):
                 with accelerator.accumulate(self.model.base):
                     # Convert images to latent space
-                    pixel_values = batch["pixel_values"]
-                    model_input = self.model.vae.encode(pixel_values).latent_dist.sample()
+                    model_input = self.model.vae.encode(batch["pixel_values"]).latent_dist.sample()
                     model_input = model_input * self.model.vae.config.scaling_factor
                     model_input = model_input.to(weight_dtype)
 
@@ -391,19 +426,24 @@ class SDLoRATrainer ():
 
                     ####################################################################################################
                     # time ids
-                    add_time_ids = torch.cat(
-                        [
-                            self.compute_time_ids(s, c, t) 
-                            for s, c, t in 
-                            zip(batch["original_sizes"], batch["crops_coords_top_left"], batch['target_sizes'])
-                        ]
-                    )
-                    add_time_ids = add_time_ids.to(accelerator.device, dtype=weight_dtype)
-                    unet_added_conditions = {"time_ids": add_time_ids}
+                    unet_added_conditions = None
+                    if hasattr(self.model, "text_encoder_2"):
+                        add_time_ids = torch.cat(
+                            [
+                                self.compute_time_ids(s, c, t) 
+                                for s, c, t in 
+                                zip(batch["original_sizes"], batch["crops_coords_top_left"], batch['target_sizes'])
+                            ]
+                        )
+                        add_time_ids = add_time_ids.to(accelerator.device, dtype=weight_dtype)
+                        unet_added_conditions = {"time_ids": add_time_ids}
+
+                    prompt_embeds, pooled_prompt_embeds = self.encode_prompt(prompt=batch['captions'])
+
+                    if hasattr(self.model, "text_encoder_2"):
+                        unet_added_conditions.update({"text_embeds": pooled_prompt_embeds})
 
                     # Predict the noise residual
-                    prompt_embeds, pooled_prompt_embeds = self.encode_prompt(prompt=batch['captions'])
-                    unet_added_conditions.update({"text_embeds": pooled_prompt_embeds})
                     model_pred = self.model.base(
                         noisy_model_input,
                         timesteps,
@@ -458,20 +498,31 @@ class SDLoRATrainer ():
 
             if self.args.train_text_encoder:
                 self.model.text_encoder = accelerator.unwrap_model(self.model.text_encoder)
-                self.model.text_encoder_2 = accelerator.unwrap_model(self.model.text_encoder_2)
-
                 text_encoder_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.text_encoder))
-                text_encoder_2_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.text_encoder_2))
+                if hasattr(self.model, "text_encoder_2"):
+                    self.model.text_encoder_2 = accelerator.unwrap_model(self.model.text_encoder_2)
+                    text_encoder_2_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.text_encoder_2))
+
             else:
                 text_encoder_lora_layers = None
-                text_encoder_2_lora_layers = None
+                if hasattr(self.model, "text_encoder_2"):
+                    text_encoder_2_lora_layers = None
 
-            StableDiffusionXLPipeline.save_lora_weights(
-                save_directory=self.args.output_dir,
-                unet_lora_layers=unet_lora_state_dict,
-                text_encoder_lora_layers=text_encoder_lora_layers,
-                text_encoder_2_lora_layers=text_encoder_2_lora_layers,
-            )
+            if hasattr(self.model, "text_encoder_2"):
+                StableDiffusionXLPipeline.save_lora_weights(
+                    save_directory=self.args.output_dir,
+                    unet_lora_layers=unet_lora_state_dict,
+                    text_encoder_lora_layers=text_encoder_lora_layers,
+                    text_encoder_2_lora_layers=text_encoder_2_lora_layers,
+                    safe_serialization=True,
+                )
+            else:
+                StableDiffusionPipeline.save_lora_weights(
+                    save_directory=self.args.output_dir,
+                    unet_lora_layers=unet_lora_state_dict,
+                    text_encoder_lora_layers=text_encoder_lora_layers,
+                    safe_serialization=True,
+                )
             
             del text_encoder_lora_layers
             del text_encoder_2_lora_layers

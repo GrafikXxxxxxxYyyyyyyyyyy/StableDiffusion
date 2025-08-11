@@ -462,7 +462,7 @@ class StableDiffusionUnifiedPipeline():
         ############################################################################################################################################
         # Denoising loop
         ############################################################################################################################################
-        for i, t in tqdm(enumerate(timesteps)):
+        for i, t in enumerate(tqdm(timesteps)):
             # Удваиваем количество латентов если работаем в режиме do_cfg=True 
             latent_model_input = latents
             if self.do_classifier_free_guidance:

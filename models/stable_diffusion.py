@@ -84,7 +84,7 @@ class SDModelWrapper():
         # Есл не нужно загрузить переданный чекпоинт, то ставится по умолчанию
         if ckpt_path is None:
             ckpt_path = "runwayml/stable-diffusion-v1-5"
-            if model_type is not None and isinstance(model_type, str):
+            if model_type is not None and isinstance(model_type, str) and model_type == "sdxl":
                 ckpt_path = "stabilityai/stable-diffusion-xl-base-1.0"                 
         
         # Грузим модель из выбранного чекпоинта
