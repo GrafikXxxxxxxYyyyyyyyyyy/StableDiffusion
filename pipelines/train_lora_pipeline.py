@@ -3,14 +3,21 @@ import math
 import tqdm
 import torch
 from PIL import Image
+import torch.nn.functional as F
 from accelerate import Accelerator
+from torchvision import transforms
+from accelerate.utils import set_seed
 from torch.utils.data import Dataset
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Dict
 from dataclasses import dataclass
 from ..models.stable_diffusion import SDModelWrapper
 from peft import LoraConfig
+from diffusers import StableDiffusionXLPipeline
 from diffusers.training_utils import cast_training_params
-from accelerate.utils import DistributedDataParallelKwargs, DistributedType, ProjectConfiguration, set_seed
+from peft.utils import get_peft_model_state_dict
+from diffusers.utils import convert_state_dict_to_diffusers
+from diffusers.optimization import get_scheduler
+from torchvision.transforms.functional import crop
 
 
 
@@ -27,7 +34,7 @@ def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
 
 
 @dataclass
-class TrainingArguments:
+class SDTrainingArgs:
     seed: Optional[int] = None
     train_batch_size: int = 4
     gradient_accumulation_steps: int = 1
@@ -43,12 +50,74 @@ class TrainingArguments:
     dataloader_num_workers: int = 0
     max_train_steps: Optional[int] = None
     num_train_epochs: int = 100
+    lr_scheduler: str = 'constant'
+    lr_warmup_steps: int = 500
+    resolution: int = 1024
+    max_grad_norm: float = 1.0
 
 
 
 
 class SDLoRADataset(Dataset):
-    pass
+    def __init__(self, data_path: str = "data", target_size=(1024, 1024)):
+        """
+        Args:
+            data_path (str): Путь к директории с данными (по умолчанию "data")
+            transform (callable, optional): Трансформации для изображений
+        """
+        self.data_path = data_path
+        self.random_crop = transforms.RandomCrop((3024,3024))
+        self.transform = transforms.Compose([
+            # transforms.RandomCrop((3024,3024)),
+            transforms.Resize(target_size),
+            transforms.RandomHorizontalFlip(p=1.0),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5])
+        ])
+        self.target_size = target_size
+        
+        # Собираем список всех файлов .jpg в директории
+        self.image_files = [f for f in os.listdir(data_path) if f.endswith('.jpg')]
+        
+        # Проверяем, что для каждого изображения есть соответствующий .txt файл
+        self.valid_pairs = []
+        for img_file in self.image_files:
+            txt_file = os.path.splitext(img_file)[0] + '.txt'
+            if os.path.exists(os.path.join(data_path, txt_file)):
+                self.valid_pairs.append((img_file, txt_file))
+            else:
+                print(f"Warning: No annotation file found for {img_file}")
+
+    def __len__(self) -> int:
+        return len(self.valid_pairs)
+
+    def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, str]]:
+        img_file, txt_file = self.valid_pairs[idx]
+        
+        # Загружаем изображение
+        img_path = os.path.join(self.data_path, img_file)
+        image = Image.open(img_path).convert('RGB')
+        original_sizes = image.size
+        
+        # Применяем трансформации, если они есть
+        y1, x1, h, w = self.random_crop.get_params(image, (3024, 3024))
+        image = crop(image, y1, x1, h, w)
+        crop_top_left = (y1, x1)
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        # Загружаем текст аннотации
+        txt_path = os.path.join(self.data_path, txt_file)
+        with open(txt_path, 'r', encoding='utf-8') as f:
+            caption = f.read().strip()
+        
+        return {
+            'pixel_values': image,
+            'original_sizes': original_sizes,
+            'crops_coords_top_left': crop_top_left,
+            'target_sizes': self.target_size,
+            'caption': caption
+        }
 
 
 
@@ -56,7 +125,7 @@ class SDLoRATrainer ():
     def __init__(
         self,
         model: SDModelWrapper,
-        args: TrainingArguments,
+        args: SDTrainingArgs,
         train_dataset: SDLoRADataset, 
     ):
         self.model = model
@@ -64,16 +133,67 @@ class SDLoRATrainer ():
         self.dataset = train_dataset
 
 
+    def encode_prompt(self, prompt):
+        tokenizers = [self.model.tokenizer]
+        text_encoders = [self.model.text_encoder]
+        prompt = [prompt] if isinstance(prompt, str) else prompt 
+        prompts = [prompt] 
+
+        # Define tokenizers and text encoders so
+        # it can be used with sd15 and sdxl self.models
+        if hasattr(self.model, "text_encoder_2") and hasattr(self.model, "tokenizer_2"):
+            tokenizers = [self.model.tokenizer, self.model.tokenizer_2]
+            text_encoders = [self.model.text_encoder, self.model.text_encoder_2]
+            prompt_2 = prompt_2 or prompt
+            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+            # textual inversion: process multi-vector tokens if necessary
+            prompts = [prompt, prompt_2]
+
+        prompt_embeds_list = []
+        pooled_prompt_embeds = None
+        for prompt, tokenizer, text_encoder in zip(prompts, tokenizers, text_encoders):
+            text_input_ids = tokenizer(
+                prompt,
+                padding="max_length",
+                max_length=tokenizer.model_max_length,
+                truncation=True,
+                return_tensors="pt",
+            ).input_ids
+
+            prompt_embeds = text_encoder(
+                text_input_ids.to(text_encoder.device), output_hidden_states=True, return_dict=False
+            )
+
+            pooled_prompt_embeds = prompt_embeds[0]
+            prompt_embeds = (
+                prompt_embeds.hidden_states[-2] 
+                if hasattr(self.model, "text_encoder_2") else 
+                prompt_embeds[0]
+            )
+            prompt_embeds_list.append(prompt_embeds)
+
+        prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
+
+        return prompt_embeds, pooled_prompt_embeds
+    
+
+    def compute_time_ids(self, original_size, crops_coords_top_left, target_size):
+        add_time_ids = list(original_size + crops_coords_top_left + target_size)
+        add_time_ids = torch.tensor([add_time_ids])
+
+        return add_time_ids
+
+
+
+
     def train(self):
         # 1. Инициализируем акселератор
         accelerator = Accelerator(
             gradient_accumulation_steps=self.args.gradient_accumulation_steps,
             mixed_precision=self.args.mixed_precision,
-            # log_with=args.report_to,
-            # project_config=accelerator_project_config,
-            # kwargs_handlers=[kwargs],
         )
         print("Accelerator OK!", accelerator.device)
+
 
         # 2. Устанавливаем рандомный параметр
         if self.args.seed is not None:
@@ -164,16 +284,30 @@ class SDLoRATrainer ():
 
 
         # 8. Создаём даталоудер
-        def collate_fn():
-            pass
+        def collate_fn(examples):
+            pixel_values = torch.stack([example["pixel_values"] for example in examples])
+            pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+            original_sizes = [example["original_sizes"] for example in examples]
+            crop_top_lefts = [example["crops_coords_top_left"] for example in examples]
+            target_sizes = [example['target_sizes'] for example in examples]
+            captions = [example['caption'] for example in examples]
+            result = {
+                "pixel_values": pixel_values,
+                "original_sizes": original_sizes,
+                "crops_coords_top_left": crop_top_lefts,
+                'target_sizes': target_sizes,
+                'captions': captions
+            }
+            return result
 
         train_dataloader = torch.utils.data.DataLoader(
             self.dataset,
             shuffle=True,
-            # collate_fn=collate_fn,
+            collate_fn=collate_fn,
             batch_size=self.args.train_batch_size,
             num_workers=self.args.dataloader_num_workers,
         )
+        print("Dataloader OK!")
 
         
         # Scheduler and math around the number of training steps.
@@ -184,11 +318,12 @@ class SDLoRATrainer ():
             overrode_max_train_steps = True
 
         lr_scheduler = get_scheduler(
-            args.lr_scheduler,
+            self.args.lr_scheduler,
             optimizer=optimizer,
-            num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-            num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+            num_warmup_steps=self.args.lr_warmup_steps * self.args.gradient_accumulation_steps,
+            num_training_steps=self.args.max_train_steps * self.args.gradient_accumulation_steps,
         )
+        print("lr scheduler OK!")
 
 
         # 9. Подготавливаем всё в акселератор
@@ -200,6 +335,7 @@ class SDLoRATrainer ():
             self.model.base, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
                 self.model.base, optimizer, train_dataloader, lr_scheduler
             )
+        print("All prepared with Accelerator!")
 
 
         # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -245,7 +381,7 @@ class SDLoRATrainer ():
 
                     # Sample a random timestep for each image
                     timesteps = torch.randint(
-                        0, self.model.scheduler.config.num_train_timesteps, (bsz,), device=model_input.device
+                        0, self.model.scheduler.config.num_train_timesteps, (bsz,), device=accelerator.device
                     )
                     timesteps = timesteps.long()
 
@@ -255,26 +391,18 @@ class SDLoRATrainer ():
 
                     ####################################################################################################
                     # time ids
-                    def compute_time_ids(original_size, crops_coords_top_left):
-                        # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
-                        target_size = (args.resolution, args.resolution)
-                        add_time_ids = list(original_size + crops_coords_top_left + target_size)
-                        add_time_ids = torch.tensor([add_time_ids])
-                        add_time_ids = add_time_ids.to(accelerator.device, dtype=weight_dtype)
-                        return add_time_ids
-
                     add_time_ids = torch.cat(
-                        [compute_time_ids(s, c) for s, c in zip(batch["original_sizes"], batch["crop_top_lefts"])]
+                        [
+                            self.compute_time_ids(s, c, t) 
+                            for s, c, t in 
+                            zip(batch["original_sizes"], batch["crops_coords_top_left"], batch['target_sizes'])
+                        ]
                     )
+                    add_time_ids = add_time_ids.to(accelerator.device, dtype=weight_dtype)
+                    unet_added_conditions = {"time_ids": add_time_ids}
 
                     # Predict the noise residual
-                    unet_added_conditions = {"time_ids": add_time_ids}
-                    prompt_embeds, pooled_prompt_embeds = encode_prompt(
-                        text_encoders=[text_encoder_one, text_encoder_two],
-                        tokenizers=None,
-                        prompt=None,
-                        text_input_ids_list=[batch["input_ids_one"], batch["input_ids_two"]],
-                    )
+                    prompt_embeds, pooled_prompt_embeds = self.encode_prompt(prompt=batch['captions'])
                     unet_added_conditions.update({"text_embeds": pooled_prompt_embeds})
                     model_pred = self.model.base(
                         noisy_model_input,
@@ -296,13 +424,13 @@ class SDLoRATrainer ():
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                     
                     # Gather the losses across all processes for logging (if we use distributed training).
-                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                    train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                    avg_loss = accelerator.gather(loss.repeat(self.args.train_batch_size)).mean()
+                    train_loss += avg_loss.item() / self.args.gradient_accumulation_steps
 
                     # Backpropagate
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
-                        accelerator.clip_grad_norm_(params_to_optimize, args.max_grad_norm)
+                        accelerator.clip_grad_norm_(params_to_optimize, self.args.max_grad_norm)
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad()
@@ -325,29 +453,26 @@ class SDLoRATrainer ():
         # Save the lora layers
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
-            unet = unwrap_model(unet)
-            unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unet))
+            self.model.base = accelerator.unwrap_model(self.model.base)
+            unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.base))
 
-            if args.train_text_encoder:
-                text_encoder_one = unwrap_model(text_encoder_one)
-                text_encoder_two = unwrap_model(text_encoder_two)
+            if self.args.train_text_encoder:
+                self.model.text_encoder = accelerator.unwrap_model(self.model.text_encoder)
+                self.model.text_encoder_2 = accelerator.unwrap_model(self.model.text_encoder_2)
 
-                text_encoder_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(text_encoder_one))
-                text_encoder_2_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(text_encoder_two))
+                text_encoder_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.text_encoder))
+                text_encoder_2_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.model.text_encoder_2))
             else:
                 text_encoder_lora_layers = None
                 text_encoder_2_lora_layers = None
 
             StableDiffusionXLPipeline.save_lora_weights(
-                save_directory=args.output_dir,
+                save_directory=self.args.output_dir,
                 unet_lora_layers=unet_lora_state_dict,
                 text_encoder_lora_layers=text_encoder_lora_layers,
                 text_encoder_2_lora_layers=text_encoder_2_lora_layers,
             )
-
-            del unet
-            del text_encoder_one
-            del text_encoder_two
+            
             del text_encoder_lora_layers
             del text_encoder_2_lora_layers
             torch.cuda.empty_cache()

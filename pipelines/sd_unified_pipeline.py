@@ -529,7 +529,6 @@ class StableDiffusionUnifiedPipeline():
         return images
         
         
-    # TODO: Reconstruct logic 
     def encode_prompt(
         self,
         prompt: Optional[str] = None,
