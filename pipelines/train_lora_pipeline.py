@@ -399,7 +399,8 @@ class SDLoRATrainer ():
             self.model.base.train()
             if self.args.train_text_encoder:
                 self.model.text_encoder.train()
-                self.model.text_encoder_2.train()
+                if hasattr(self.model, "text_encoder_2"):
+                    self.model.text_encoder_2.train()
 
             train_loss = 0.0
             for step, batch in enumerate(train_dataloader):
@@ -524,8 +525,6 @@ class SDLoRATrainer ():
                     safe_serialization=True,
                 )
             
-            del text_encoder_lora_layers
-            del text_encoder_2_lora_layers
             torch.cuda.empty_cache()
 
 
