@@ -101,7 +101,9 @@ class SDLoRADataset(Dataset):
         original_sizes = image.size
         
         # Применяем трансформации, если они есть
-        y1, x1, h, w = self.random_crop.get_params(image, (3024, 3024))
+        y1, x1, h, w = self.random_crop.get_params(
+            image, (min(original_sizes[0], original_sizes[1]), min(original_sizes[0], original_sizes[1]))
+        )
         image = crop(image, y1, x1, h, w)
         crop_top_left = (y1, x1)
         if self.transform is not None:
